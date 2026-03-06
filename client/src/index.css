@@ -1,0 +1,889 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* ─── Design Tokens (Default / Shared) ─────────────────────────────────── */
+:root {
+  /* Brand — never changes across themes */
+  --primary: #f97316;
+  --primary-dark: #ea580c;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --danger: #ef4444;
+  --info: #3b82f6;
+
+  /* Layout — never changes */
+  --sidebar-w: 288px;
+  --topbar-h: 64px;
+  --bottomnav-h: 64px;
+
+  /* ── Theme-aware tokens (override per theme below) ─────────────── */
+  --theme-bg-deep: #0a0f1e;
+  --theme-bg-dark: #0f172a;
+  --theme-bg-card: #1e293b;
+  --theme-bg-card2: #243048;
+  --theme-bg-muted: #1a2744;
+  --theme-bg-hover: rgba(255, 255, 255, 0.05);
+  --theme-text-main: #f8fafc;
+  --theme-text-muted: #94a3b8;
+  --theme-text-subtle: #64748b;
+  --theme-text-inverse: #0f172a;
+  --theme-border: rgba(255, 255, 255, 0.08);
+  --theme-border-solid: #1e293b;
+  --theme-input-bg: #1e293b;
+  --theme-sidebar-bg: #0d1526;
+  --theme-topbar-bg: rgba(15, 23, 42, 0.9);
+  --theme-shadow: rgba(0, 0, 0, 0.4);
+  --theme-overlay: rgba(0, 0, 0, 0.6);
+  --theme-skeleton-a: #1e293b;
+  --theme-skeleton-b: #2d3f55;
+  --theme-scrollbar: #334155;
+  --theme-scrollbar-h: #475569;
+
+  /* Legacy aliases — kept for backward compat */
+  --bg-deep: var(--theme-bg-deep);
+  --bg-dark: var(--theme-bg-dark);
+  --bg-card: var(--theme-bg-card);
+  --bg-card2: var(--theme-bg-card2);
+  --text-main: var(--theme-text-main);
+  --text-muted: var(--theme-text-muted);
+}
+
+/* ─── Theme: Default (Blue-Black — existing design) ─────────────────────── */
+[data-theme="default"] {
+  --theme-bg-deep: #0a0f1e;
+  --theme-bg-dark: #0f172a;
+  --theme-bg-card: #1e293b;
+  --theme-bg-card2: #243048;
+  --theme-bg-muted: #1a2744;
+  --theme-bg-hover: rgba(255, 255, 255, 0.05);
+  --theme-text-main: #f8fafc;
+  --theme-text-muted: #94a3b8;
+  --theme-text-subtle: #64748b;
+  --theme-text-inverse: #0f172a;
+  --theme-border: rgba(255, 255, 255, 0.08);
+  --theme-border-solid: #1e293b;
+  --theme-input-bg: #1e293b;
+  --theme-sidebar-bg: #0d1526;
+  --theme-topbar-bg: rgba(15, 23, 42, 0.90);
+  --theme-shadow: rgba(0, 0, 0, 0.4);
+  --theme-overlay: rgba(0, 0, 0, 0.6);
+  --theme-skeleton-a: #1e293b;
+  --theme-skeleton-b: #2d3f55;
+  --theme-scrollbar: #334155;
+  --theme-scrollbar-h: #475569;
+}
+
+/* ─── Theme: Pure Dark (True Black) ─────────────────────────────────────── */
+[data-theme="dark"] {
+  --theme-bg-deep: #000000;
+  --theme-bg-dark: #050505;
+  --theme-bg-card: #0f0f0f;
+  --theme-bg-card2: #141414;
+  --theme-bg-muted: #111111;
+  --theme-bg-hover: rgba(250, 115, 22, 0.04);
+  --theme-text-main: #ffffff;
+  --theme-text-muted: #94a3b8;
+  --theme-text-subtle: #475569;
+  --theme-text-inverse: #000000;
+  --theme-border: rgba(255, 255, 255, 0.05);
+  --theme-border-solid: #1a1a1a;
+  --theme-input-bg: #0f0f0f;
+  --theme-sidebar-bg: #000000;
+  --theme-topbar-bg: rgba(0, 0, 0, 0.85);
+  --theme-shadow: rgba(0, 0, 0, 0.8);
+  --theme-overlay: rgba(0, 0, 0, 0.8);
+  --theme-skeleton-a: #0f0f0f;
+  --theme-skeleton-b: #1a1a1a;
+  --theme-scrollbar: #1a1a1a;
+  --theme-scrollbar-h: #252525;
+}
+
+/* ─── Theme: Light (Clean White) ────────────────────────────────────────── */
+[data-theme="light"] {
+  --theme-bg-deep: #f1f5f9;
+  --theme-bg-dark: #f8fafc;
+  --theme-bg-card: #ffffff;
+  --theme-bg-card2: #ffffff;
+  --theme-bg-muted: #f1f5f9;
+  --theme-bg-hover: rgba(0, 0, 0, 0.03);
+  --theme-text-main: #0f172a;
+  --theme-text-muted: #475569;
+  --theme-text-subtle: #94a3b8;
+  --theme-text-inverse: #ffffff;
+  --theme-border: rgba(0, 0, 0, 0.06);
+  --theme-border-solid: #e2e8f0;
+  --theme-input-bg: #ffffff;
+  --theme-sidebar-bg: #ffffff;
+  --theme-topbar-bg: rgba(255, 255, 255, 0.8);
+  --theme-shadow: rgba(0, 0, 0, 0.04);
+  --theme-overlay: rgba(15, 23, 42, 0.3);
+  --theme-skeleton-a: #f1f5f9;
+  --theme-skeleton-b: #e2e8f0;
+  --theme-scrollbar: #cbd5e1;
+  --theme-scrollbar-h: #94a3b8;
+}
+
+
+/* ─── Base Reset ─────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html {
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  /* ── Optimization: Prevent layout shifts on theme change ─────── */
+  background-color: var(--theme-bg-dark);
+  color: var(--theme-text-main);
+  /* ── Smooth theme transitions ─────────────────────────────────── */
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease;
+}
+
+body {
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  background-color: var(--theme-bg-dark);
+  color: var(--theme-text-main);
+  min-height: 100vh;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* ── Smooth theme transitions ─────────────────────────────────── */
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1), color 0.2s ease;
+}
+
+/* ─── Touch-Friendly Interactive Elements ───────────────────────────────── */
+button,
+[role="button"],
+a {
+  min-height: 44px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Tighten tap targets that are decorative or inline */
+button.btn-xs {
+  min-height: 32px;
+}
+
+/* ─── Premium Utilities ─────────────────────────────────────────────────── */
+.glass-panel {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.theme-light .glass-panel {
+  background: rgba(255, 255, 255, 0.7);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.tap-scale {
+  transition: transform 0.1s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.tap-scale:active {
+  transform: scale(0.96);
+}
+
+/* ─── Scrolling ─── */
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* ─── Input / Form ──────────────────────────────────────────────────────── */
+input,
+select,
+textarea {
+  background-color: var(--theme-input-bg);
+  border: 1px solid var(--theme-border-solid);
+  color: var(--theme-text-main);
+  padding: 0.75rem;
+  border-radius: 10px;
+  width: 100%;
+  outline: none;
+  font-family: inherit;
+  font-size: 16px;
+  /* Prevents iOS zoom on focus */
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.25s, color 0.2s;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(249, 115, 22, 0.15);
+}
+
+/* ─── Scrollbar ──────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--theme-scrollbar);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--theme-scrollbar-h);
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--theme-scrollbar);
+  border-radius: 999px;
+}
+
+/* ─── Animations ─────────────────────────────────────────────────────────── */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInLeft {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.3s ease-out forwards;
+}
+
+.animate-slide-left {
+  animation: slideInLeft 0.3s ease-out forwards;
+}
+
+.animate-slide-right {
+  animation: slideInRight 0.3s ease-out forwards;
+}
+
+.animate-slide-up {
+  animation: slideUp 0.25s ease-out forwards;
+}
+
+.animate-scale-in {
+  animation: scaleIn 0.2s ease-out forwards;
+}
+
+/* ─── Skeleton Loader ────────────────────────────────────────────────────── */
+.skeleton {
+  background: linear-gradient(90deg,
+      var(--theme-skeleton-a) 25%,
+      var(--theme-skeleton-b) 50%,
+      var(--theme-skeleton-a) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+  border-radius: 8px;
+}
+
+.skeleton-text {
+  height: 1em;
+  border-radius: 4px;
+}
+
+.skeleton-circle {
+  border-radius: 999px;
+}
+
+/* ─── Status Badges ──────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.65rem;
+  border-radius: 9999px;
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  white-space: nowrap;
+}
+
+.badge-pending {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.3);
+}
+
+.badge-accepted {
+  background: rgba(99, 102, 241, 0.12);
+  color: #818cf8;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.badge-preparing {
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.badge-ready {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.badge-completed {
+  background: rgba(100, 116, 139, 0.12);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.badge-cancelled {
+  background: rgba(239, 68, 68, 0.12);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* ─── Card ───────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--bg-card);
+  border-radius: 14px;
+  padding: 1.25rem;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 24px -6px rgba(0, 0, 0, 0.4);
+  transition: box-shadow 0.2s, border-color 0.2s, transform 0.2s;
+}
+
+.card:hover {
+  box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.5);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+/* ─── Responsive Table Wrapper ───────────────────────────────────────────── */
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ─── Status dot ─────────────────────────────────────────────────────────── */
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ─── Bottom Nav Safe Area ───────────────────────────────────────────────── */
+.bottom-nav-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+}
+
+/* ─── Overlay backdrop ───────────────────────────────────────────────────── */
+.overlay-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(4px);
+  z-index: 40;
+}
+
+/* ─── No-scroll body when drawer open ───────────────────────────────────── */
+body.drawer-open {
+  overflow: hidden;
+}
+
+/* ─── Table status colors ────────────────────────────────────────────────── */
+.status-available {
+  --sc: #10b981;
+}
+
+.status-reserved {
+  --sc: #f59e0b;
+}
+
+.status-occupied {
+  --sc: #ef4444;
+}
+
+.status-billing {
+  --sc: #f97316;
+}
+
+.status-cleaning {
+  --sc: #6b7280;
+}
+
+/* ─── Print Styles ───────────────────────────────────────────────────────── */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #printable-receipt,
+  #printable-receipt * {
+    visibility: visible;
+  }
+
+  #printable-receipt {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background: white;
+  }
+
+  @page {
+    size: auto;
+    margin: 0mm;
+  }
+}
+
+/* ─── Utility: no horizontal scroll ─────────────────────────────────────── */
+.page-container {
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+/* ─── Custom Shadow / Glow utilities ────────────────────────────────────── */
+/* Referenced via Tailwind's arbitrary class or direct CSS class            */
+.shadow-glow-orange {
+  box-shadow: 0 0 20px -5px rgba(249, 115, 22, 0.4);
+}
+
+.shadow-glow-green {
+  box-shadow: 0 0 20px -5px rgba(16, 185, 129, 0.4);
+}
+
+.shadow-glow-yellow {
+  box-shadow: 0 0 20px -5px rgba(234, 179, 8, 0.4);
+}
+
+.shadow-glow-blue {
+  box-shadow: 0 0 20px -5px rgba(59, 130, 246, 0.4);
+}
+
+.shadow-glow-red {
+  box-shadow: 0 0 20px -5px rgba(239, 68, 68, 0.4);
+}
+
+.shadow-glow-gray {
+  box-shadow: 0 0 20px -5px rgba(148, 163, 184, 0.4);
+}
+
+.shadow-card-hover {
+  box-shadow: 0 8px 32px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.shadow-sidebar {
+  box-shadow: 4px 0 24px -4px rgba(0, 0, 0, 0.5);
+}
+
+/* ─── iOS safe-area helpers ─────────────────────────────────────────────── */
+.pt-safe {
+  padding-top: max(0px, env(safe-area-inset-top));
+}
+
+.pb-safe {
+  padding-bottom: max(0px, env(safe-area-inset-bottom));
+}
+
+.pl-safe {
+  padding-left: max(0px, env(safe-area-inset-left));
+}
+
+.pr-safe {
+  padding-right: max(0px, env(safe-area-inset-right));
+}
+
+/* ─── Modal mobile safety ───────────────────────────────────────────────── */
+/* Clamp modal height so it never overflows on short viewports (e.g. 568px) */
+.modal-body {
+  max-height: min(70vh, calc(100dvh - 180px));
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ─── Prevent double tap zoom on buttons (Android Chrome) ──────────────── */
+button,
+[role="button"] {
+  touch-action: manipulation;
+}
+
+/* ─── Tab highlight removal (Samsung/Android) ───────────────────────────── */
+* {
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* ─── Theme Transition Helper ────────────────────────────────────────────── */
+/* Apply to any element that should animate smoothly on theme change          */
+.transition-theme {
+  transition:
+    background-color 0.25s ease,
+    color 0.2s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+
+/* ─── Light Theme: global overrides for elements with hardcoded dark styles  */
+/* These selectors only activate when .theme-light is on <html>               */
+.theme-light .shadow-sidebar {
+  box-shadow: 4px 0 24px -4px rgba(0, 0, 0, 0.04);
+}
+
+.theme-light .shadow-2xl {
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.06);
+}
+
+/* Hardcoded Background Overrides */
+.theme-light .bg-\[\#0f172a\],
+.theme-light .bg-\[\#0a0f1e\],
+.theme-light .bg-gray-900 {
+  background-color: var(--theme-bg-deep) !important;
+}
+
+.theme-light .bg-\[\#1e293b\],
+.theme-light .bg-gray-800 {
+  background-color: var(--theme-bg-card) !important;
+}
+
+.theme-light .bg-\[\#1a2744\],
+.theme-light .bg-gray-800\/60,
+.theme-light .bg-gray-800\/80 {
+  background-color: var(--theme-bg-muted) !important;
+}
+
+.theme-light .bg-gray-900\/20,
+.theme-light .bg-gray-900\/40,
+.theme-light .bg-gray-900\/50,
+.theme-light .hover\:bg-gray-700\/30:hover,
+.theme-light .hover\:bg-gray-700\/40:hover {
+  background-color: rgba(0, 0, 0, 0.025) !important;
+}
+
+/* Border Overrides */
+.theme-light .border-gray-700,
+.theme-light .border-gray-700\/50,
+.theme-light .border-gray-800\/50,
+.theme-light .border-gray-800\/60 {
+  border-color: var(--theme-border) !important;
+}
+
+/* Table / Divider Overrides */
+.theme-light .divide-gray-700\/40>*+*,
+.theme-light .divide-gray-800\/50>*+* {
+  border-color: var(--theme-border) !important;
+}
+
+/* Text Overrides - Flip hardcoded white/light text to dark */
+.theme-light .text-white,
+.theme-light .text-gray-100,
+.theme-light .text-gray-200 {
+  color: #ffffff !important;
+}
+
+.theme-light .text-gray-300,
+.theme-light .text-gray-400 {
+  color: var(--theme-text-muted) !important;
+}
+
+.theme-light .text-gray-500 {
+  color: var(--theme-text-subtle) !important;
+}
+
+/* Ensure icons in dark buttons adapt */
+.theme-light button.bg-gray-800,
+.theme-light button.bg-gray-900 {
+  color: var(--theme-text-main) !important;
+}
+
+/* Specific component fixes */
+.theme-light .bg-orange-500\/10,
+.theme-light .bg-orange-900\/20 {
+  background-color: rgba(249, 115, 22, 0.1) !important;
+}
+
+.theme-light .bg-emerald-900\/20 {
+  background-color: rgba(16, 185, 129, 0.1) !important;
+}
+
+.theme-light .bg-yellow-900\/20 {
+  background-color: rgba(245, 158, 11, 0.1) !important;
+}
+
+.theme-light .bg-red-900\/20 {
+  background-color: rgba(239, 68, 68, 0.1) !important;
+}
+
+.theme-light .bg-blue-500\/10 {
+  background-color: rgba(59, 130, 246, 0.1) !important;
+}
+
+.theme-light .bg-green-500\/10 {
+  background-color: rgba(34, 197, 94, 0.1) !important;
+}
+
+.theme-light .bg-rose-500\/10 {
+  background-color: rgba(244, 63, 94, 0.1) !important;
+}
+
+/* Ensure text in status badges is readable (darker colors for light theme) */
+.theme-light .text-emerald-400 {
+  color: #059669 !important;
+}
+
+.theme-light .text-yellow-400 {
+  color: #d97706 !important;
+}
+
+.theme-light .text-red-400 {
+  color: #dc2626 !important;
+}
+
+.theme-light .text-orange-400 {
+  color: #ea580c !important;
+}
+
+.theme-light .text-blue-400 {
+  color: #2563eb !important;
+}
+
+.theme-light .text-pink-400 {
+  color: #db2777 !important;
+}
+
+.theme-light .text-indigo-400 {
+  color: #4f46e5 !important;
+}
+
+.theme-light .text-teal-400 {
+  color: #0d9488 !important;
+}
+
+.theme-light .text-amber-400 {
+  color: #d97706 !important;
+}
+
+/* ─── Pure Dark Theme: premium pitch-black adjustments ──────────────────── */
+.theme-dark .shadow-sidebar {
+  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.9);
+}
+
+.theme-dark .bg-orange-500\/10 {
+  background-color: rgba(249, 115, 22, 0.04) !important;
+}
+
+/* Ensure borders are extra subtle in dark mode */
+.theme-dark .border-gray-700,
+.theme-dark .border-gray-700\/50,
+.theme-dark .border-gray-800\/50,
+.theme-dark .border-gray-800\/60 {
+  border-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+/* ─── Global Performance & Polish ───────────────────────────────────────── */
+[data-theme] {
+  transition: background-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    color 0.2s ease;
+}
+
+/* Prevent text selection on decorative items for better "app" feel */
+.badge,
+.status-dot,
+button {
+  user-select: none;
+}
+
+/* ─── Responsive Utilities ───────────────────────────────────────────────── */
+
+/* Ensure images and media never overflow their containers */
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Cards stack and go full-width on mobile */
+@media (max-width: 640px) {
+
+  /* Modals take full width on tiny screens with side margin */
+  .modal-shell {
+    width: calc(100vw - 2rem);
+    max-width: 100%;
+  }
+
+  /* Reduce large title sizes on phones */
+  .page-title {
+    font-size: 1.25rem;
+  }
+
+  /* Table wrapper always scrollable */
+  .table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+
+/* ─── Extra-small screen tweaks (320px – 374px) ─────────────────────────── */
+@media (max-width: 374px) {
+
+  /* Shrink top-bar title text slightly so it never truncates badly */
+  header h1 {
+    font-size: 0.95rem;
+  }
+
+  /* Stack bottom-nav labels under icons only when there are 5+ items */
+  nav.lg\:hidden span.text-\[10px\] {
+    font-size: 9px;
+  }
+
+  /* Ensure stat counters don't overflow on 320px screens */
+  .grid-cols-3>* {
+    min-width: 0;
+  }
+}
+
+/* ─── Tablet improvements (481px – 768px) ───────────────────────────────── */
+@media (min-width: 481px) and (max-width: 768px) {
+
+  /* Give page content breathing room on medium-small screens */
+  .space-y-5>* {
+    max-width: 100%;
+  }
+}
+
+/* ─── Touch target enforcement for anchor tags ──────────────────────────── */
+/* Only apply min-height to standalone links, not inline text links */
+a:not([class]) {
+  display: inline-block;
+}
+
+/* ─── Prevent chart containers from causing horizontal scroll ────────────── */
+.recharts-wrapper,
+.recharts-responsive-container {
+  max-width: 100% !important;
+}
+
+/* ─── Safe area for devices with notch (iOS/Android) ────────────────────── */
+@supports (padding: max(0px)) {
+  .bottom-nav-safe {
+    padding-bottom: max(0.5rem, env(safe-area-inset-bottom));
+  }
+
+  main {
+    padding-left: max(0px, env(safe-area-inset-left));
+    padding-right: max(0px, env(safe-area-inset-right));
+  }
+}
+
+/* ─── Tap scale feedback for touch interactions ──────────────────────────── */
+/* Gives buttons and interactive cards a subtle press feel on mobile          */
+.tap-scale {
+  transition: transform 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.tap-scale:active {
+  transform: scale(0.97);
+}
+
+/* Larger interactive regions get a gentler scale */
+.tap-scale-sm:active {
+  transform: scale(0.985);
+}
+
+/* ─── Smooth scroll for all overflow containers ──────────────────────────── */
+.overflow-y-auto,
+.overflow-x-auto {
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* ─── Input/textarea: prevent iOS font zoom (font-size must be ≥16px) ────── */
+@media (max-width: 768px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  input[type="tel"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: 16px;
+  }
+}
