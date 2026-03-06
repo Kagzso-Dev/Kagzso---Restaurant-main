@@ -3,7 +3,7 @@ import axios from "axios";
 // Get API URL — prioritize local for dev unless explicitly overridden
 const isDev = import.meta.env.MODE === 'development';
 const baseURL = (
-    import.meta.env.VITE_API_URL || (isDev ? "http://localhost:5005" : "https://kagzso-restaurant.onrender.com")
+    import.meta.env.VITE_API_URL || (isDev ? "http://localhost:5005" : "https://kagzso-restaurant-main-1.onrender.com")
 ).replace(/\/+$/, "");
 
 // Create axios instance

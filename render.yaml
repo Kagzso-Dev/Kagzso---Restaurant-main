@@ -1,0 +1,28 @@
+services:
+  # ── Backend: Node.js API ───────────────────────────────────────────────────
+  - type: web
+    name: kagzso-restaurant-main-1
+    runtime: node
+    rootDir: server
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: CLIENT_URL
+        value: https://kagzso-pos-frontend.onrender.com
+
+  # ── Frontend: React + Vite Static Site ────────────────────────────────────
+  - type: web
+    name: kagzso-pos-frontend
+    runtime: node
+    rootDir: client
+    buildCommand: npm install --include=dev && npm run build
+    startCommand: npx serve -s dist -l $PORT
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: VITE_API_URL
+        value: https://kagzso-restaurant-main-1.onrender.com
+      - key: VITE_SOCKET_URL
+        value: https://kagzso-restaurant-main-1.onrender.com
