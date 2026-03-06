@@ -22,6 +22,13 @@ const Settings = () => {
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState(null);
 
+    // Auto-dismiss toast after 5 seconds
+    useEffect(() => {
+        if (!message) return;
+        const timer = setTimeout(() => setMessage(null), 5000);
+        return () => clearTimeout(timer);
+    }, [message]);
+
     useEffect(() => {
         if (settings) {
             setGeneralConfig({
