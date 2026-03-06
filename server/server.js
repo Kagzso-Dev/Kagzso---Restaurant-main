@@ -19,7 +19,8 @@ const server = http.createServer(app);
 const allowedOrigins = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
-    process.env.CLIENT_URL,
+    'https://kagzso-pos-frontend.onrender.com', // production frontend
+    process.env.CLIENT_URL,                      // override via env if needed
 ].filter(Boolean);
 
 const corsOptions = {
