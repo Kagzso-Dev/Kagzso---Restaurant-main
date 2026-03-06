@@ -124,11 +124,6 @@ const Login = () => {
                         Sign In
                     </button>
 
-                    <div className="text-center mt-4">
-                        <button type="button" className="text-sm text-orange-500 hover:text-orange-400 transition-colors">
-                            Don't have an account? Register
-                        </button>
-                    </div>
                 </form>
             </div>
 
