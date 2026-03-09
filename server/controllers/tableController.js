@@ -1,22 +1,20 @@
 const Table = require('../models/Table');
 
 // ─── VALID STATUS TRANSITIONS ────────────────────────────────────────────────
-// Prevents invalid state changes (e.g. jumping from 'cleaning' to 'billing')
 const VALID_TRANSITIONS = {
     available: ['reserved'],
-    reserved: ['occupied', 'available'],  // occupied when order placed, available on cancel/timeout
-    occupied: ['billing'],
-    billing: ['cleaning'],                // after payment
-    cleaning: ['available'],              // after manual clean confirm
+    reserved:  ['occupied', 'available'],
+    occupied:  ['billing'],
+    billing:   ['cleaning'],
+    cleaning:  ['available'],
 };
 
-// @desc    Get all tables for this branch
+// @desc    Get all tables
 // @route   GET /api/tables
 // @access  Private
 const getTables = async (req, res) => {
     try {
-        const tables = await Table.find({}).sort({ number: 1 });
-        res.json(tables);
+        res.json(await Table.findAll());
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -27,34 +25,24 @@ const getTables = async (req, res) => {
 // @access  Private (Admin)
 const createTable = async (req, res) => {
     const { number, capacity } = req.body;
-
     try {
-        const tableExists = await Table.findOne({ number });
-        if (tableExists) {
+        if (await Table.numberExists(number)) {
             return res.status(400).json({ message: 'Table number already exists' });
         }
-
-        const table = await Table.create({
-            number,
-            capacity,
-            status: 'available',
-        });
-
+        const table = await Table.create({ number, capacity });
         res.status(201).json(table);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// @desc    Update table
+// @desc    Update table status
 // @route   PUT /api/tables/:id
 // @access  Private (Admin, Waiter, Cashier)
 const updateTable = async (req, res) => {
     const { status } = req.body;
-
     try {
         const table = await Table.findById(req.params.id);
-
         if (!table) {
             return res.status(404).json({ message: 'Table not found' });
         }
@@ -68,47 +56,34 @@ const updateTable = async (req, res) => {
             }
         }
 
-        if (status) table.status = status;
-        if (status === 'available') {
-            table.lockedBy = null;
-            table.reservedAt = null;
-            table.currentOrderId = null;
+        const updates = {};
+        if (status) {
+            updates.status = status;
+            if (status === 'available') {
+                updates.lockedBy       = null;
+                updates.reservedAt     = null;
+                updates.currentOrderId = null;
+            }
         }
 
-        await table.save();
-
+        const updated = await Table.updateById(req.params.id, updates);
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId: table._id,
-            status: table.status,
-            lockedBy: table.lockedBy,
+            tableId:  updated._id,
+            status:   updated.status,
+            lockedBy: updated.lockedBy,
         });
-
-        res.json(table);
+        res.json(updated);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// @desc    Reserve a table (Waiter only)
+// @desc    Reserve a table (atomic — prevents double-booking)
 // @route   PUT /api/tables/:id/reserve
 // @access  Private (Waiter, Admin)
 const reserveTable = async (req, res) => {
     try {
-        const table = await Table.findOneAndUpdate(
-            {
-                _id: req.params.id,
-                status: 'available',
-            },
-            {
-                $set: {
-                    status: 'reserved',
-                    lockedBy: req.user._id,
-                    reservedAt: new Date(),
-                },
-            },
-            { new: true }
-        );
-
+        const table = await Table.atomicReserve(req.params.id, req.user._id);
         if (!table) {
             const existing = await Table.findById(req.params.id);
             if (!existing) {
@@ -118,13 +93,11 @@ const reserveTable = async (req, res) => {
                 message: `Table is currently "${existing.status}" and cannot be reserved`,
             });
         }
-
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId: table._id,
-            status: 'reserved',
+            tableId:  table._id,
+            status:   'reserved',
             lockedBy: table.lockedBy,
         });
-
         res.json(table);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -137,29 +110,21 @@ const reserveTable = async (req, res) => {
 const releaseTable = async (req, res) => {
     try {
         const table = await Table.findById(req.params.id);
-
         if (!table) {
             return res.status(404).json({ message: 'Table not found' });
         }
-
         if (table.status !== 'reserved') {
             return res.status(400).json({
                 message: `Table is "${table.status}", only reserved tables can be released`,
             });
         }
-
-        table.status = 'available';
-        table.lockedBy = null;
-        table.reservedAt = null;
-        table.currentOrderId = null;
-        await table.save();
-
-        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId: table._id,
-            status: 'available',
+        const updated = await Table.updateById(req.params.id, {
+            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
         });
-
-        res.json(table);
+        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+            tableId: updated._id, status: 'available',
+        });
+        res.json(updated);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -171,57 +136,42 @@ const releaseTable = async (req, res) => {
 const markTableClean = async (req, res) => {
     try {
         const table = await Table.findById(req.params.id);
-
         if (!table) {
             return res.status(404).json({ message: 'Table not found' });
         }
-
         if (table.status !== 'cleaning') {
             return res.status(400).json({
                 message: `Table is "${table.status}", only tables in "cleaning" can be marked clean`,
             });
         }
-
-        table.status = 'available';
-        table.lockedBy = null;
-        table.reservedAt = null;
-        table.currentOrderId = null;
-        await table.save();
-
-        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId: table._id,
-            status: 'available',
+        const updated = await Table.updateById(req.params.id, {
+            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
         });
-
-        res.json(table);
+        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+            tableId: updated._id, status: 'available',
+        });
+        res.json(updated);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// @desc    Force reset table
+// @desc    Force reset table to available
 // @route   PUT /api/tables/:id/force-reset
 // @access  Private (Admin only)
 const forceResetTable = async (req, res) => {
     try {
         const table = await Table.findById(req.params.id);
-
         if (!table) {
             return res.status(404).json({ message: 'Table not found' });
         }
-
-        table.status = 'available';
-        table.lockedBy = null;
-        table.reservedAt = null;
-        table.currentOrderId = null;
-        await table.save();
-
-        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId: table._id,
-            status: 'available',
+        const updated = await Table.updateById(req.params.id, {
+            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
         });
-
-        res.json({ message: 'Table force-reset to available', table });
+        req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+            tableId: updated._id, status: 'available',
+        });
+        res.json({ message: 'Table force-reset to available', table: updated });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -233,46 +183,34 @@ const forceResetTable = async (req, res) => {
 const deleteTable = async (req, res) => {
     try {
         const table = await Table.findById(req.params.id);
-
         if (!table) {
             return res.status(404).json({ message: 'Table not found' });
         }
-
         if (table.status !== 'available') {
             return res.status(400).json({
                 message: `Cannot delete table while status is "${table.status}". Reset it first.`,
             });
         }
-
-        await table.deleteOne();
+        await Table.deleteById(req.params.id);
         res.json({ message: 'Table removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// ─── AUTO-RELEASE
+// ─── AUTO-RELEASE expired reservations (runs on a timer) ─────────────────────
 const autoReleaseExpiredReservations = async (io) => {
     const TEN_MINUTES = 10 * 60 * 1000;
-    const cutoff = new Date(Date.now() - TEN_MINUTES);
-
+    const cutoff      = new Date(Date.now() - TEN_MINUTES);
     try {
-        const expiredTables = await Table.find({
-            status: 'reserved',
-            reservedAt: { $lt: cutoff },
-            currentOrderId: null,
-        });
-
+        const expiredTables = await Table.findExpiredReservations(cutoff);
         for (const table of expiredTables) {
-            table.status = 'available';
-            table.lockedBy = null;
-            table.reservedAt = null;
-            await table.save();
-
+            await Table.updateById(table._id, {
+                status: 'available', lockedBy: null, reservedAt: null,
+            });
             if (io) {
                 io.to('restaurant_main').emit('table-updated', {
-                    tableId: table._id,
-                    status: 'available',
+                    tableId: table._id, status: 'available',
                 });
             }
         }

@@ -1,17 +1,12 @@
-const jwt = require('jsonwebtoken');
+const jwt    = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
-const User = require('../models/User');
+const User   = require('../models/User');
 
-/**
- * Generate JWT.
- */
-const generateToken = ({ userId, role }) => {
-    return jwt.sign(
-        { userId, role },
-        process.env.JWT_SECRET,
-        { expiresIn: '30d', issuer: 'KOT_AUTH' }
-    );
-};
+const generateToken = ({ userId, role }) =>
+    jwt.sign({ userId, role }, process.env.JWT_SECRET, {
+        expiresIn: '30d',
+        issuer:    'KOT_AUTH',
+    });
 
 // @desc    Register a new user
 // @route   POST /api/auth/register
@@ -20,25 +15,17 @@ const registerUser = async (req, res) => {
     try {
         const { username, password, role } = req.body;
 
-        const userExists = await User.findOne({ username });
-        if (userExists) {
+        if (await User.usernameExists(username)) {
             return res.status(400).json({ message: 'User already exists' });
         }
 
-        const user = await User.create({
-            username,
-            password, // Plain password: pre-save hook will hash it
-            role,
-        });
+        const user = await User.create({ username, password, role });
 
         res.status(201).json({
-            _id: user._id,
+            _id:      user._id,
             username: user.username,
-            role: user.role,
-            token: generateToken({
-                userId: user._id,
-                role: user.role,
-            }),
+            role:     user.role,
+            token:    generateToken({ userId: user._id, role: user.role }),
         });
     } catch (error) {
         console.error('Register error:', error);
@@ -54,7 +41,6 @@ const loginUser = async (req, res) => {
         const { username, password } = req.body;
 
         const user = await User.findOne({ username });
-
         if (!user) {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
@@ -64,16 +50,11 @@ const loginUser = async (req, res) => {
             return res.status(401).json({ message: 'Invalid credentials' });
         }
 
-        const token = generateToken({
-            userId: user._id,
-            role: user.role,
-        });
-
         res.json({
-            _id: user._id,
+            _id:      user._id,
             username: user.username,
-            role: user.role,
-            token,
+            role:     user.role,
+            token:    generateToken({ userId: user._id, role: user.role }),
         });
     } catch (error) {
         console.error('Login error:', error);
@@ -86,8 +67,7 @@ const loginUser = async (req, res) => {
 // @access  Private
 const getMe = async (req, res) => {
     try {
-        const user = await User.findById(req.userId).select('-password');
-
+        const user = await User.findById(req.userId, true); // excludePassword = true
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
         }
@@ -98,4 +78,3 @@ const getMe = async (req, res) => {
 };
 
 module.exports = { registerUser, loginUser, getMe };
-

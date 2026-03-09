@@ -1,12 +1,11 @@
 const Category = require('../models/Category');
 
-// @desc    Get all categories for this branch
+// @desc    Get all active categories
 // @route   GET /api/categories
 // @access  Private
 const getCategories = async (req, res) => {
     try {
-        const categories = await Category.find({ status: 'active' });
-        res.json(categories);
+        res.json(await Category.findActive());
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -17,13 +16,8 @@ const getCategories = async (req, res) => {
 // @access  Private (Admin)
 const createCategory = async (req, res) => {
     const { name, description, color } = req.body;
-
     try {
-        const category = await Category.create({
-            name,
-            description,
-            color,
-        });
+        const category = await Category.create({ name, description, color });
         res.status(201).json(category);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -35,7 +29,7 @@ const createCategory = async (req, res) => {
 // @access  Private (Admin)
 const updateCategory = async (req, res) => {
     try {
-        const category = await Category.findByIdAndUpdate(req.params.id, req.body, { new: true });
+        const category = await Category.updateById(req.params.id, req.body);
         res.json(category);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -47,7 +41,7 @@ const updateCategory = async (req, res) => {
 // @access  Private (Admin)
 const deleteCategory = async (req, res) => {
     try {
-        await Category.findByIdAndDelete(req.params.id);
+        await Category.deleteById(req.params.id);
         res.json({ message: 'Category removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -55,4 +49,3 @@ const deleteCategory = async (req, res) => {
 };
 
 module.exports = { getCategories, createCategory, updateCategory, deleteCategory };
-

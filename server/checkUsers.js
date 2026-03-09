@@ -1,13 +1,12 @@
-const mongoose = require('mongoose');
 const dotenv = require('dotenv');
-const User = require('./models/User');
-
 dotenv.config();
+
+const { pool, connectDB } = require('./config/db');
 
 const checkUsers = async () => {
     try {
-        await mongoose.connect(process.env.MONGO_URI);
-        const users = await User.find({}, 'username role');
+        await connectDB();
+        const [users] = await pool.query('SELECT id, username, role, created_at FROM users');
         console.log('Current Users in DB:');
         console.log(JSON.stringify(users, null, 2));
         process.exit(0);

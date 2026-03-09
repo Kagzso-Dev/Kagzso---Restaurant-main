@@ -1,52 +1,45 @@
-const Order = require('../models/Order');
-const Table = require('../models/Table');
+const Order  = require('../models/Order');
+const Table  = require('../models/Table');
 const { createAndEmitNotification } = require('./notificationController');
-const { invalidateCache } = require('../utils/cache');
+const { invalidateCache }           = require('../utils/cache');
 
-// @desc    Get all orders (filtered by branch)
+// Helper: extract raw table ID from either the populated object or plain value
+const rawTableId = (tableId) =>
+    tableId && typeof tableId === 'object' ? tableId._id : tableId;
+
+// @desc    Get all orders (filtered by role/status/kotStatus)
 // @route   GET /api/orders
 // @access  Private
 const getOrders = async (req, res) => {
     try {
         const { page = 1, limit = 50, kotStatus, status } = req.query;
-
         const filter = {};
 
-        // KOT Filtering for Kitchen Display
         if (kotStatus) {
             filter.kotStatus = kotStatus === 'Open' ? { $ne: 'Closed' } : kotStatus;
         }
-
-        // Specific order status filter (e.g., active orders only)
         if (status) {
             filter.orderStatus = status;
         }
-
-        // Kitchen only sees active (non-completed/paid) orders if no specific KOT status requested
+        // Kitchen only sees active orders by default
         if (req.role === 'kitchen' && !kotStatus) {
             filter.orderStatus = { $in: ['pending', 'accepted', 'preparing', 'ready'] };
         }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
-
         const [orders, total] = await Promise.all([
-            Order.find(filter)
-                .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(parseInt(limit))
-                .populate('tableId', 'number')
-                .lean(),
-            Order.countDocuments(filter)
+            Order.find(filter, { skip, limit: parseInt(limit) }),
+            Order.count(filter),
         ]);
 
         res.json({
             orders,
             pagination: {
                 total,
-                page: parseInt(page),
+                page:  parseInt(page),
                 pages: Math.ceil(total / limit),
-                limit: parseInt(limit)
-            }
+                limit: parseInt(limit),
+            },
         });
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -57,35 +50,14 @@ const getOrders = async (req, res) => {
 // @route   POST /api/orders
 // @access  Private (Waiter, Cashier, Admin)
 const createOrder = async (req, res) => {
-    const {
-        orderType,
-        tableId,
-        customerInfo,
-        items,
-        totalAmount,
-        tax,
-        discount,
-        finalAmount,
-    } = req.body;
+    const { orderType, tableId, customerInfo, items, totalAmount, tax, discount, finalAmount } = req.body;
 
     if (!items || items.length === 0) {
         return res.status(400).json({ message: 'No order items' });
     }
 
     try {
-        const order = new Order({
-            orderType,
-            tableId,
-            customerInfo,
-            items,
-            totalAmount,
-            tax,
-            discount,
-            finalAmount,
-            waiterId: req.userId,
-        });
-
-        // If Dine-In, validate table status before creating order
+        // Validate table availability before creating order
         if (orderType === 'dine-in' && tableId) {
             const table = await Table.findById(tableId);
             if (!table) {
@@ -98,42 +70,41 @@ const createOrder = async (req, res) => {
             }
         }
 
-        const createdOrder = await order.save();
+        const createdOrder = await Order.create({
+            orderType, tableId, customerInfo, items,
+            totalAmount, tax, discount, finalAmount,
+            waiterId: req.userId,
+        });
 
-        // If Dine-In, transition table → occupied
+        // Transition table → occupied
         if (orderType === 'dine-in' && tableId) {
+            await Table.updateById(tableId, {
+                status:         'occupied',
+                currentOrderId: createdOrder._id,
+                reservedAt:     null,
+            });
             const table = await Table.findById(tableId);
-            if (table) {
-                table.status = 'occupied';
-                table.currentOrderId = createdOrder._id;
-                table.reservedAt = null;
-                await table.save();
-                req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                    tableId: table._id,
-                    status: 'occupied',
-                    lockedBy: table.lockedBy,
-                });
-            }
+            req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+                tableId:  table._id,
+                status:   'occupied',
+                lockedBy: table.lockedBy,
+            });
         }
 
-        // Emit new order to Kitchen (global restaurant room)
-        const room = 'restaurant_main';
-        req.app.get('socketio').to(room).emit('new-order', createdOrder);
+        req.app.get('socketio').to('restaurant_main').emit('new-order', createdOrder);
 
-        // ── Auto-notify kitchen: NEW_ORDER ──
         createAndEmitNotification(req.app.get('socketio'), {
-            title: `New Order #${createdOrder.orderNumber}`,
-            message: `${createdOrder.items.length} item(s) — ${createdOrder.orderType === 'dine-in' ? 'Dine-In' : 'Takeaway'}`,
-            type: 'NEW_ORDER',
-            roleTarget: 'kitchen',
-            referenceId: createdOrder._id,
+            title:         `New Order #${createdOrder.orderNumber}`,
+            message:       `${createdOrder.items.length} item(s) — ${createdOrder.orderType === 'dine-in' ? 'Dine-In' : 'Takeaway'}`,
+            type:          'NEW_ORDER',
+            roleTarget:    'kitchen',
+            referenceId:   createdOrder._id,
             referenceType: 'order',
-            createdBy: req.userId,
+            createdBy:     req.userId,
         });
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
-
         res.status(201).json(createdOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -145,75 +116,57 @@ const createOrder = async (req, res) => {
 // @access  Private (Kitchen, Admin, Cashier)
 const updateOrderStatus = async (req, res) => {
     const { status } = req.body;
-    const orderId = req.params.id;
-
     try {
-        const order = await Order.findById(orderId);
-
+        const order = await Order.findById(req.params.id);
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
 
-        // Role-based validation
         if (req.role === 'kitchen' && status === 'completed') {
             return res.status(403).json({ message: 'Kitchen cannot mark orders as completed' });
         }
-
-        if (status === 'cancelled') {
-            if (['preparing', 'ready'].includes(order.orderStatus) && req.role !== 'admin') {
-                return res.status(403).json({ message: 'Only admin can cancel after preparation starts' });
-            }
+        if (status === 'cancelled' &&
+            ['preparing', 'ready'].includes(order.orderStatus) &&
+            req.role !== 'admin') {
+            return res.status(403).json({ message: 'Only admin can cancel after preparation starts' });
         }
 
-        // Check Auto-Close KOT Logic
-        if (status === 'completed' && order.paymentStatus === 'paid') {
-            order.kotStatus = 'Closed';
+        const updates = { orderStatus: status };
+        if (status === 'completed' && order.paymentStatus === 'paid') updates.kotStatus = 'Closed';
+        if (status === 'preparing' && !order.prepStartedAt) updates.prepStartedAt = new Date();
+        if (status === 'ready'     && !order.readyAt)       updates.readyAt       = new Date();
+        if (status === 'completed' && !order.completedAt)   updates.completedAt   = new Date();
 
-            if (order.orderType === 'dine-in' && order.tableId) {
-                const table = await Table.findById(order.tableId);
-                if (table) {
-                    table.status = 'cleaning';
-                    table.currentOrderId = null;
-                    await table.save();
-                    req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                        tableId: table._id,
-                        status: 'cleaning',
-                    });
-                }
-            }
+        const updatedOrder = await Order.updateById(req.params.id, updates);
+
+        // Table lifecycle: completed + paid → cleaning
+        if (status === 'completed' &&
+            order.paymentStatus === 'paid' &&
+            order.orderType === 'dine-in' &&
+            order.tableId) {
+            const tid = rawTableId(order.tableId);
+            await Table.updateById(tid, { status: 'cleaning', currentOrderId: null });
+            req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+                tableId: tid, status: 'cleaning',
+            });
         }
 
-        // Analytics tracking
-        if (status === 'preparing' && !order.prepStartedAt) {
-            order.prepStartedAt = new Date();
-        } else if (status === 'ready' && !order.readyAt) {
-            order.readyAt = new Date();
-        } else if (status === 'completed' && !order.completedAt) {
-            order.completedAt = new Date();
-        }
+        req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
 
-        order.orderStatus = status;
-        const updatedOrder = await order.save();
-
-        const room = 'restaurant_main';
-        req.app.get('socketio').to(room).emit('order-updated', updatedOrder);
-
-        // ── Auto-notify waiter: ORDER_READY ──
         if (status === 'ready') {
             createAndEmitNotification(req.app.get('socketio'), {
-                title: `Order #${order.orderNumber} Ready`,
-                message: `Order is ready for pickup/serving`,
-                type: 'ORDER_READY',
-                roleTarget: 'waiter',
-                referenceId: order._id,
+                title:         `Order #${order.orderNumber} Ready`,
+                message:       'Order is ready for pickup/serving',
+                type:          'ORDER_READY',
+                roleTarget:    'waiter',
+                referenceId:   order._id,
                 referenceType: 'order',
-                createdBy: req.userId,
+                createdBy:     req.userId,
             });
         }
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
-
         res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -224,101 +177,75 @@ const updateOrderStatus = async (req, res) => {
 // @route   PUT /api/orders/:id/items/:itemId/status
 // @access  Private (Kitchen, Admin)
 const updateItemStatus = async (req, res) => {
-    const { status } = req.body;
-    const { id, itemId } = req.params;
-
+    const { status }        = req.body;
+    const { id, itemId }    = req.params;
     try {
         const order = await Order.findById(id);
-
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
 
-        const item = order.items.id(itemId);
+        const item = await Order.getItemById(id, itemId);
         if (!item) {
             return res.status(404).json({ message: 'Item not found' });
         }
-
         if (item.status === 'CANCELLED') {
             return res.status(400).json({ message: 'Cannot update status of a cancelled item' });
         }
 
-        item.status = status;
-        await order.save();
-
-        const room = 'restaurant_main';
-        req.app.get('socketio').to(room).emit('itemUpdated', order);
-        req.app.get('socketio').to(room).emit('order-updated', order);
+        const updatedOrder = await Order.updateItemStatus(id, itemId, status);
+        req.app.get('socketio').to('restaurant_main').emit('itemUpdated',    updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated',  updatedOrder);
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
-
-        res.json(order);
+        res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-// @desc    Process payment
+// @desc    Quick payment (inline, without full payment controller flow)
 // @route   PUT /api/orders/:id/payment
 // @access  Private (Cashier, Admin)
 const processPayment = async (req, res) => {
     const { paymentMethod, amountPaid } = req.body;
-    const orderId = req.params.id;
-
     try {
-        const order = await Order.findById(orderId);
-
+        const order = await Order.findById(req.params.id);
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
-
         if (order.paymentStatus === 'paid') {
-            return res.json({
-                success: true,
-                message: 'Payment already processed',
-                order,
-            });
+            return res.json({ success: true, message: 'Payment already processed', order });
         }
-
         if (order.orderStatus !== 'ready') {
             return res.status(400).json({
                 message: 'Payment not allowed. Kitchen process not completed.',
             });
         }
 
-        order.paymentStatus = 'paid';
-        order.paymentMethod = paymentMethod || 'cash';
-        order.orderStatus = 'completed';
-        order.kotStatus = 'Closed';
-        order.paymentAt = new Date();
-        order.paidAt = new Date();
-        order.completedAt = order.completedAt || new Date();
-
-        await order.save();
+        const updatedOrder = await Order.updateById(req.params.id, {
+            paymentStatus: 'paid',
+            paymentMethod: paymentMethod || 'cash',
+            orderStatus:   'completed',
+            kotStatus:     'Closed',
+            paymentAt:     new Date(),
+            paidAt:        new Date(),
+            completedAt:   order.completedAt || new Date(),
+        });
 
         if (order.orderType === 'dine-in' && order.tableId) {
-            const table = await Table.findById(order.tableId);
-            if (table) {
-                table.status = 'cleaning';
-                table.currentOrderId = null;
-                await table.save();
-                req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                    tableId: table._id,
-                    status: 'cleaning',
-                });
-            }
+            const tid = rawTableId(order.tableId);
+            await Table.updateById(tid, { status: 'cleaning', currentOrderId: null });
+            req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+                tableId: tid, status: 'cleaning',
+            });
         }
 
-        const room = 'restaurant_main';
-        req.app.get('socketio').to(room).emit('order-updated', order);
-        req.app.get('socketio').to(room).emit('order-completed', order);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated',   updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-completed', updatedOrder);
 
-        res.json({
-            success: true,
-            message: 'Payment successful & token closed',
-            order,
-        });
+        res.json({ success: true, message: 'Payment successful & token closed', order: updatedOrder });
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
@@ -327,64 +254,57 @@ const processPayment = async (req, res) => {
     }
 };
 
-// @desc    Cancel order
+// @desc    Cancel entire order
 // @route   PUT /api/orders/:id/cancel
 // @access  Private (Waiter, Kitchen, Admin)
 const cancelOrder = async (req, res) => {
     const { reason } = req.body;
-    const orderId = req.params.id;
-
     try {
-        const order = await Order.findById(orderId);
-
+        const order = await Order.findById(req.params.id);
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
-
         if (['completed', 'cancelled'].includes(order.orderStatus)) {
-            return res.status(400).json({ message: `Cannot cancel an order that is already ${order.orderStatus}` });
+            return res.status(400).json({
+                message: `Cannot cancel an order that is already ${order.orderStatus}`,
+            });
         }
 
+        // Role-based cancellation rules
         if (req.role === 'waiter') {
             if (order.orderStatus !== 'pending') {
                 return res.status(403).json({ message: 'Waiters can only cancel pending orders' });
             }
         } else if (req.role === 'kitchen') {
             if (!['pending', 'accepted', 'preparing'].includes(order.orderStatus)) {
-                return res.status(403).json({ message: 'Kitchen can only cancel orders that are pending or being prepared' });
+                return res.status(403).json({
+                    message: 'Kitchen can only cancel orders that are pending or being prepared',
+                });
             }
-        } else if (req.role !== 'admin') {
+        } else if (!['waiter', 'kitchen', 'admin'].includes(req.role)) {
             return res.status(403).json({ message: 'Your role is not authorized to cancel orders' });
         }
 
-        order.orderStatus = 'cancelled';
-        order.kotStatus = 'Closed';
-        order.cancelledBy = req.role.toUpperCase();
-        order.cancelReason = reason || 'No reason provided';
+        const updatedOrder = await Order.updateById(req.params.id, {
+            orderStatus:  'cancelled',
+            kotStatus:    'Closed',
+            cancelledBy:  req.role.toUpperCase(),
+            cancelReason: reason || 'No reason provided',
+        });
 
         if (order.orderType === 'dine-in' && order.tableId) {
-            const table = await Table.findById(order.tableId);
-            if (table) {
-                table.status = 'available';
-                table.currentOrderId = null;
-                await table.save();
-
-                req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                    tableId: table._id,
-                    status: 'available',
-                });
-            }
+            const tid = rawTableId(order.tableId);
+            await Table.updateById(tid, { status: 'available', currentOrderId: null });
+            req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+                tableId: tid, status: 'available',
+            });
         }
 
-        const updatedOrder = await order.save();
-        const room = 'restaurant_main';
-
-        req.app.get('socketio').to(room).emit('orderCancelled', updatedOrder);
-        req.app.get('socketio').to(room).emit('order-updated', updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('orderCancelled', updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated',  updatedOrder);
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
-
         res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -396,72 +316,65 @@ const cancelOrder = async (req, res) => {
 // @access  Private (Waiter, Kitchen)
 const cancelOrderItem = async (req, res) => {
     const { id: orderId, itemId } = req.params;
-    const { reason } = req.body;
+    const { reason }              = req.body;
 
     try {
         const order = await Order.findById(orderId);
-
         if (!order) {
             return res.status(404).json({ message: 'Order not found' });
         }
 
-        const item = order.items.id(itemId);
+        const item = await Order.getItemById(orderId, itemId);
         if (!item) {
             return res.status(404).json({ message: 'Item not found' });
         }
 
         const currentStatus = item.status?.toUpperCase();
-
         if (currentStatus === 'CANCELLED') {
             return res.status(400).json({ message: 'Item is already cancelled' });
         }
-
-        if (req.role === 'waiter') {
-            if (['PREPARING', 'READY'].includes(currentStatus)) {
-                return res.status(403).json({ message: 'Waiters cannot cancel items that are preparing or ready' });
-            }
+        if (req.role === 'waiter' && ['PREPARING', 'READY'].includes(currentStatus)) {
+            return res.status(403).json({
+                message: 'Waiters cannot cancel items that are preparing or ready',
+            });
         }
 
-        item.status = 'CANCELLED';
-        item.cancelledBy = req.role.toUpperCase();
-        item.cancelReason = reason || 'Item cancelled';
-        item.cancelledAt = new Date();
+        // Cancel the item
+        let updatedOrder = await Order.cancelItem(orderId, itemId, {
+            cancelledBy:  req.role.toUpperCase(),
+            cancelReason: reason || 'Item cancelled',
+        });
 
-        const activeItems = order.items.filter(i => i.status !== 'CANCELLED');
+        // Recalculate order totals from remaining active items
+        const activeItems    = updatedOrder.items.filter(i => i.status !== 'CANCELLED');
         const newTotalAmount = activeItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
 
+        let newTax = 0;
         if (order.totalAmount > 0) {
             const taxRate = order.tax / order.totalAmount;
-            order.tax = Math.round(newTotalAmount * taxRate * 100) / 100;
+            newTax = Math.round(newTotalAmount * taxRate * 100) / 100;
         }
+        const newFinalAmount = newTotalAmount + newTax - order.discount;
 
-        order.totalAmount = newTotalAmount;
-        order.finalAmount = order.totalAmount + order.tax - order.discount;
+        const orderUpdates = { totalAmount: newTotalAmount, tax: newTax, finalAmount: newFinalAmount };
 
         if (activeItems.length === 0) {
-            order.orderStatus = 'cancelled';
-            order.kotStatus = 'Closed';
-
-            if (order.orderType === 'dine-in' && order.tableId) {
-                const table = await Table.findById(order.tableId);
-                if (table) {
-                    table.status = 'available';
-                    table.currentOrderId = null;
-                    await table.save();
-                    req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                        tableId: table._id,
-                        status: 'available',
-                    });
-                }
-            }
+            orderUpdates.orderStatus = 'cancelled';
+            orderUpdates.kotStatus   = 'Closed';
         }
 
-        const updatedOrder = await order.save();
-        const room = 'restaurant_main';
+        updatedOrder = await Order.updateById(orderId, orderUpdates);
 
-        req.app.get('socketio').to(room).emit('itemUpdated', updatedOrder);
-        req.app.get('socketio').to(room).emit('order-updated', updatedOrder);
+        if (activeItems.length === 0 && order.orderType === 'dine-in' && order.tableId) {
+            const tid = rawTableId(order.tableId);
+            await Table.updateById(tid, { status: 'available', currentOrderId: null });
+            req.app.get('socketio').to('restaurant_main').emit('table-updated', {
+                tableId: tid, status: 'available',
+            });
+        }
 
+        req.app.get('socketio').to('restaurant_main').emit('itemUpdated',   updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
         res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -474,45 +387,8 @@ const cancelOrderItem = async (req, res) => {
 const searchOrders = async (req, res) => {
     try {
         const q = (req.query.q || '').trim();
-        if (!q) {
-            return res.json({ orders: [] });
-        }
-
-        const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const regex = new RegExp(escaped, 'i');
-
-        const filter = {
-            $or: [
-                { orderNumber: { $regex: regex } },
-                { 'customerInfo.name': { $regex: regex } },
-            ],
-        };
-
-        const matchingTables = await Table.aggregate([
-            {
-                $addFields: {
-                    numberString: { $toString: "$number" }
-                }
-            },
-            {
-                $match: {
-                    numberString: { $regex: regex }
-                }
-            },
-            { $project: { _id: 1 } }
-        ]);
-        const tableIds = matchingTables.map(t => t._id);
-
-        if (tableIds.length) {
-            filter.$or.push({ tableId: { $in: tableIds } });
-        }
-
-        const orders = await Order.find(filter)
-            .sort({ createdAt: -1 })
-            .limit(30)
-            .populate('tableId', 'number')
-            .lean();
-
+        if (!q) return res.json({ orders: [] });
+        const orders = await Order.search(q);
         res.json({ orders });
     } catch (error) {
         res.status(500).json({ message: error.message });

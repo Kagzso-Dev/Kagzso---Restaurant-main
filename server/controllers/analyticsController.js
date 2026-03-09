@@ -1,307 +1,181 @@
-const Order = require('../models/Order');
-const User = require('../models/User');
-const mongoose = require('mongoose');
+const { pool } = require('../config/db');
 
 /**
- * @desc    Get comprehensive analytics summary
+ * @desc    Comprehensive analytics summary (revenue, order count, avg value)
  * @route   GET /api/analytics/summary
  */
 const getSummary = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+        const start = new Date(startDate || new Date().setDate(new Date().getDate() - 30));
+        const end   = new Date(endDate   || new Date());
 
-        const dateFilter = {
-            paymentStatus: 'paid',
-            createdAt: {
-                $gte: new Date(startDate || new Date().setDate(new Date().getDate() - 30)),
-                $lte: new Date(endDate || new Date())
-            }
-        };
+        const [rows] = await pool.query(
+            `SELECT SUM(final_amount)  AS totalRevenue,
+                    COUNT(*)           AS orderCount,
+                    AVG(final_amount)  AS avgOrderValue
+             FROM orders
+             WHERE payment_status = 'paid' AND created_at BETWEEN ? AND ?`,
+            [start, end]
+        );
 
-        const stats = await Order.aggregate([
-            { $match: dateFilter },
-            {
-                $group: {
-                    _id: null,
-                    totalRevenue: { $sum: '$finalAmount' },
-                    orderCount: { $sum: 1 },
-                    avgOrderValue: { $avg: '$finalAmount' }
-                }
-            }
-        ]);
-
-        res.json(stats[0] || { totalRevenue: 0, orderCount: 0, avgOrderValue: 0 });
+        const r = rows[0];
+        res.json(r?.totalRevenue != null ? {
+            totalRevenue:  parseFloat(r.totalRevenue),
+            orderCount:    r.orderCount,
+            avgOrderValue: parseFloat(r.avgOrderValue),
+        } : { totalRevenue: 0, orderCount: 0, avgOrderValue: 0 });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
 /**
- * @desc    Get Revenue Heatmap Data
- * @route   GET /api/analytics/heatmap
+ * @desc    Revenue heatmap (hourly or daily)
+ * @route   GET /api/analytics/heatmap?type=hourly|daily
  */
 const getHeatmap = async (req, res) => {
     try {
-        const { type } = req.query; // 'hourly' or 'daily'
-        const match = {
-            paymentStatus: 'paid'
-        };
-
-        let groupStage;
+        const { type } = req.query;
+        let sql;
         if (type === 'hourly') {
-            groupStage = {
-                $group: {
-                    _id: { hour: { $hour: '$createdAt' } },
-                    revenue: { $sum: '$finalAmount' },
-                    count: { $sum: 1 }
-                }
-            };
+            sql = `SELECT HOUR(created_at)    AS hour,
+                          SUM(final_amount)   AS revenue,
+                          COUNT(*)            AS count
+                   FROM orders
+                   WHERE payment_status = 'paid'
+                   GROUP BY HOUR(created_at)
+                   ORDER BY hour`;
         } else {
-            groupStage = {
-                $group: {
-                    _id: { day: { $dayOfWeek: '$createdAt' } },
-                    revenue: { $sum: '$finalAmount' },
-                    count: { $sum: 1 }
-                }
-            };
+            sql = `SELECT DAYOFWEEK(created_at) AS day,
+                          SUM(final_amount)     AS revenue,
+                          COUNT(*)              AS count
+                   FROM orders
+                   WHERE payment_status = 'paid'
+                   GROUP BY DAYOFWEEK(created_at)
+                   ORDER BY day`;
         }
-
-        const data = await Order.aggregate([
-            { $match: match },
-            groupStage,
-            { $sort: { '_id.hour': 1, '_id.day': 1 } }
-        ]);
-
-        res.json(data);
+        const [rows] = await pool.query(sql);
+        res.json(rows.map(r => ({ ...r, revenue: parseFloat(r.revenue) })));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
 /**
- * @desc    Get Waiter Productivity Ranking
+ * @desc    Waiter productivity ranking
  * @route   GET /api/analytics/waiters
  */
 const getWaitersRanking = async (req, res) => {
     try {
-        const data = await Order.aggregate([
-            {
-                $match: {
-                    waiterId: { $exists: true, $ne: null },
-                    orderStatus: 'completed'
-                }
-            },
-            {
-                $group: {
-                    _id: '$waiterId',
-                    totalOrders: { $sum: 1 },
-                    totalRevenue: { $sum: '$finalAmount' },
-                    avgCompletionTime: {
-                        $avg: { $subtract: ['$completedAt', '$createdAt'] }
-                    }
-                }
-            },
-            {
-                $lookup: {
-                    from: 'users',
-                    localField: '_id',
-                    foreignField: '_id',
-                    as: 'waiter'
-                }
-            },
-            { $unwind: '$waiter' },
-            {
-                $project: {
-                    waiterName: '$waiter.username',
-                    totalOrders: 1,
-                    totalRevenue: 1,
-                    avgCompletionTime: { $divide: ['$avgCompletionTime', 60000] } // ms to minutes
-                }
-            },
-            { $sort: { totalRevenue: -1 } }
-        ]);
-
-        res.json(data);
+        const [rows] = await pool.query(
+            `SELECT u.username                                           AS waiterName,
+                    COUNT(*)                                             AS totalOrders,
+                    SUM(o.final_amount)                                  AS totalRevenue,
+                    AVG(TIMESTAMPDIFF(SECOND, o.created_at, o.completed_at)) / 60
+                                                                         AS avgCompletionTime
+             FROM orders o
+             JOIN users u ON o.waiter_id = u.id
+             WHERE o.waiter_id IS NOT NULL
+               AND o.order_status = 'completed'
+             GROUP BY o.waiter_id, u.username
+             ORDER BY totalRevenue DESC`
+        );
+        res.json(rows.map(r => ({
+            ...r,
+            totalRevenue:      parseFloat(r.totalRevenue),
+            avgCompletionTime: parseFloat(r.avgCompletionTime),
+        })));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
 /**
- * @desc    Get Kitchen Performance Metrics
+ * @desc    Kitchen performance metrics (avg prep time, delay rate)
  * @route   GET /api/analytics/kitchen
  */
 const getKitchenPerformance = async (req, res) => {
     try {
-        const data = await Order.aggregate([
-            {
-                $match: {
-                    prepStartedAt: { $exists: true },
-                    readyAt: { $exists: true }
-                }
-            },
-            {
-                $group: {
-                    _id: {
-                        hour: { $hour: '$createdAt' },
-                        day: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } }
-                    },
-                    avgPrepTime: {
-                        $avg: { $subtract: ['$readyAt', '$prepStartedAt'] }
-                    },
-                    ordersCompleted: { $sum: 1 },
-                    delayedOrders: {
-                        $sum: {
-                            $cond: [
-                                { $gt: [{ $subtract: ['$readyAt', '$prepStartedAt'] }, 20 * 60000] }, // 20 mins delay threshold
-                                1,
-                                0
-                            ]
-                        }
-                    }
-                }
-            },
-            {
-                $project: {
-                    hour: '$_id.hour',
-                    date: '$_id.day',
-                    avgPrepTime: { $divide: ['$avgPrepTime', 60000] },
-                    ordersCompleted: 1,
-                    delayRate: { $multiply: [{ $divide: ['$delayedOrders', '$ordersCompleted'] }, 100] }
-                }
-            },
-            { $sort: { date: -1, hour: 1 } }
-        ]);
-
-        res.json(data);
+        const [rows] = await pool.query(
+            `SELECT HOUR(created_at)  AS hour,
+                    DATE(created_at)  AS date,
+                    AVG(TIMESTAMPDIFF(SECOND, prep_started_at, ready_at)) / 60 AS avgPrepTime,
+                    COUNT(*)          AS ordersCompleted,
+                    SUM(CASE WHEN TIMESTAMPDIFF(SECOND, prep_started_at, ready_at) > 1200
+                             THEN 1 ELSE 0 END) * 100.0 / COUNT(*) AS delayRate
+             FROM orders
+             WHERE prep_started_at IS NOT NULL
+               AND ready_at IS NOT NULL
+             GROUP BY HOUR(created_at), DATE(created_at)
+             ORDER BY date DESC, hour ASC`
+        );
+        res.json(rows.map(r => ({
+            ...r,
+            avgPrepTime: parseFloat(r.avgPrepTime),
+            delayRate:   parseFloat(r.delayRate),
+        })));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
 /**
- * @desc    Get scalable time-based report
- * @route   GET /api/analytics/report
+ * @desc    Time-based revenue report
+ * @route   GET /api/analytics/report?range=today|week|month|year
  */
 const getReport = async (req, res) => {
     try {
-        const { range } = req.query; // today | week | month | year
-
+        const { range } = req.query;
         const now = new Date();
-        let startDate;
-        let groupStage;
-        let projectStage;
+        let startDate, groupBy, labelExpr, sortExpr;
 
         switch (range) {
             case 'today':
-                startDate = new Date(now.setHours(0, 0, 0, 0));
-                groupStage = {
-                    $group: {
-                        _id: { $hour: '$createdAt' },
-                        revenue: { $sum: '$finalAmount' },
-                        orders: { $sum: 1 }
-                    }
-                };
-                projectStage = {
-                    $project: {
-                        _id: 0,
-                        label: { $concat: [{ $toString: '$_id' }, ':00'] },
-                        revenue: 1,
-                        orders: 1,
-                        sortKey: '$_id'
-                    }
-                };
+                startDate = new Date(now); startDate.setHours(0, 0, 0, 0);
+                groupBy   = 'HOUR(created_at)';
+                labelExpr = "CONCAT(HOUR(created_at), ':00')";
+                sortExpr  = 'HOUR(created_at)';
                 break;
-
             case 'week':
-                startDate = new Date(now.setDate(now.getDate() - 7));
-                groupStage = {
-                    $group: {
-                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-                        revenue: { $sum: '$finalAmount' },
-                        orders: { $sum: 1 }
-                    }
-                };
-                projectStage = {
-                    $project: {
-                        _id: 0,
-                        label: '$_id',
-                        revenue: 1,
-                        orders: 1,
-                        sortKey: '$_id'
-                    }
-                };
+                startDate = new Date(now); startDate.setDate(now.getDate() - 7);
+                groupBy   = "DATE_FORMAT(created_at, '%Y-%m-%d')";
+                labelExpr = "DATE_FORMAT(created_at, '%Y-%m-%d')";
+                sortExpr  = "DATE_FORMAT(created_at, '%Y-%m-%d')";
                 break;
-
             case 'month':
-                startDate = new Date(now.setDate(now.getDate() - 30));
-                groupStage = {
-                    $group: {
-                        _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
-                        revenue: { $sum: '$finalAmount' },
-                        orders: { $sum: 1 }
-                    }
-                };
-                projectStage = {
-                    $project: {
-                        _id: 0,
-                        label: '$_id',
-                        revenue: 1,
-                        orders: 1,
-                        sortKey: '$_id'
-                    }
-                };
+                startDate = new Date(now); startDate.setDate(now.getDate() - 30);
+                groupBy   = "DATE_FORMAT(created_at, '%Y-%m-%d')";
+                labelExpr = "DATE_FORMAT(created_at, '%Y-%m-%d')";
+                sortExpr  = "DATE_FORMAT(created_at, '%Y-%m-%d')";
                 break;
-
             case 'year':
-                startDate = new Date(now.setFullYear(now.getFullYear() - 1));
-                groupStage = {
-                    $group: {
-                        _id: { $month: '$createdAt' },
-                        revenue: { $sum: '$finalAmount' },
-                        orders: { $sum: 1 }
-                    }
-                };
-                const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-                projectStage = {
-                    $project: {
-                        _id: 0,
-                        label: {
-                            $arrayElemAt: [monthNames, { $subtract: ['$_id', 1] }]
-                        },
-                        revenue: 1,
-                        orders: 1,
-                        sortKey: '$_id'
-                    }
-                };
+                startDate = new Date(now); startDate.setFullYear(now.getFullYear() - 1);
+                groupBy   = 'MONTH(created_at)';
+                labelExpr = 'MONTHNAME(created_at)';
+                sortExpr  = 'MONTH(created_at)';
                 break;
-
             default:
-                return res.status(400).json({ message: "Invalid range. Use today, week, month, or year." });
+                return res.status(400).json({
+                    message: 'Invalid range. Use today, week, month, or year.',
+                });
         }
 
-        const report = await Order.aggregate([
-            {
-                $match: {
-                    paymentStatus: 'paid',
-                    createdAt: { $gte: startDate }
-                }
-            },
-            groupStage,
-            projectStage,
-            { $sort: { sortKey: 1 } }
-        ]);
+        const [rows] = await pool.query(
+            `SELECT ${labelExpr} AS label,
+                    SUM(final_amount) AS revenue,
+                    COUNT(*)          AS orders
+             FROM orders
+             WHERE payment_status = 'paid' AND created_at >= ?
+             GROUP BY ${groupBy}
+             ORDER BY ${sortExpr}`,
+            [startDate]
+        );
 
-        res.json(report);
+        res.json(rows.map(r => ({ ...r, revenue: parseFloat(r.revenue) })));
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
 };
 
-module.exports = {
-    getSummary,
-    getHeatmap,
-    getWaitersRanking,
-    getKitchenPerformance,
-    getReport
-};
+module.exports = { getSummary, getHeatmap, getWaitersRanking, getKitchenPerformance, getReport };

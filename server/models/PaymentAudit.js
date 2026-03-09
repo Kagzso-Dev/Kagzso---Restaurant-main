@@ -1,71 +1,50 @@
-const mongoose = require('mongoose');
+const { pool } = require('../config/db');
 
-const paymentAuditSchema = new mongoose.Schema({
-    // ── Reference ────────────────────────────────────────────────────────────
-    orderId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Order',
-        required: true,
+/**
+ * PaymentAudit — append-only audit trail for all payment lifecycle events.
+ * Replaces MongoDB PaymentAudit collection.
+ */
+const PaymentAudit = {
+    async create({
+        orderId,
+        paymentId,
+        action,
+        status,
+        amount,
+        paymentMethod,
+        transactionId,
+        performedBy,
+        performedByRole,
+        ipAddress,
+        userAgent,
+        errorMessage,
+        errorCode,
+        metadata,
+    }) {
+        await pool.query(
+            `INSERT INTO payment_audits
+             (order_id, payment_id, action, status, amount, payment_method, transaction_id,
+              performed_by, performed_by_role, ip_address, user_agent,
+              error_message, error_code, metadata)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                orderId       || null,
+                paymentId     || null,
+                action,
+                status,
+                amount        || null,
+                paymentMethod || null,
+                transactionId || null,
+                performedBy   || null,
+                performedByRole || null,
+                ipAddress     || null,
+                userAgent     || null,
+                errorMessage  || null,
+                errorCode     || null,
+                metadata ? JSON.stringify(metadata) : null,
+            ]
+        );
     },
-    paymentId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Payment',
-        index: true,
-    },
-    // ── Event Details ────────────────────────────────────────────────────────
-    action: {
-        type: String,
-        enum: [
-            'PAYMENT_INITIATED',
-            'PAYMENT_PROCESSED',
-            'PAYMENT_FAILED',
-            'PAYMENT_CANCELLED',
-            'PAYMENT_REFUNDED',
-            'PAYMENT_VERIFIED',          // webhook/callback verified
-            'STATUS_CHANGE',
-        ],
-        required: true,
-        index: true,
-    },
-    status: {
-        type: String,
-        enum: ['success', 'failed', 'pending'],
-        required: true,
-    },
-    // ── Financial Data ───────────────────────────────────────────────────────
-    amount: { type: Number },
-    paymentMethod: { type: String },
-    transactionId: { type: String },
-    // ── Context ──────────────────────────────────────────────────────────────
-    performedBy: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
-        required: true,
-    },
-    performedByRole: {
-        type: String,
-        enum: ['cashier', 'admin'],
-    },
-    ipAddress: { type: String },
-    userAgent: { type: String },
-    // ── Error Tracking ───────────────────────────────────────────────────────
-    errorMessage: { type: String },
-    errorCode: { type: String },
-    // ── Metadata ─────────────────────────────────────────────────────────────
-    metadata: { type: mongoose.Schema.Types.Mixed, default: {} },
-}, {
-    timestamps: true,
-    // Append-only: prevent updates and deletes for audit integrity
-    strict: true,
-});
+};
 
-// ── Indexes for audit queries ────────────────────────────────────────────────
-paymentAuditSchema.index({ action: 1, createdAt: -1 });
-paymentAuditSchema.index({ orderId: 1, createdAt: -1 });
-paymentAuditSchema.index({ performedBy: 1, createdAt: -1 });
-
-// ── TTL: keep audit logs for 2 years ─────────────────────────────────────────
-paymentAuditSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2 * 365 * 24 * 60 * 60 });
-
-module.exports = mongoose.model('PaymentAudit', paymentAuditSchema);
-
+module.exports = PaymentAudit;
