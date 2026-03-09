@@ -46,7 +46,7 @@ export const AuthProvider = ({ children }) => {
             console.log('%c✅ Socket connected to restaurant main room', 'color: #10b981; font-weight: bold;');
 
             if (role) {
-                newSocket.emit('join-role', role);
+                newSocket.emit('join-role', { role });
                 console.log('%c✅ Socket role-room joined:', 'color: #3b82f6; font-weight: bold;', `role_${role}`);
             }
         };
