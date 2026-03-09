@@ -17,7 +17,22 @@ const fmt = (row) => row ? {
 } : null;
 
 const MenuItem = {
-    // Returns available items with their category details populated
+    // Returns ALL items (including unavailable) with category details — for admin management
+    async findAll() {
+        const [rows] = await pool.query(`
+            SELECT m.*,
+                   c.id     AS cat_id,
+                   c.name   AS cat_name,
+                   c.color  AS cat_color,
+                   c.status AS cat_status
+            FROM menu_items m
+            LEFT JOIN categories c ON m.category_id = c.id
+            ORDER BY m.name
+        `);
+        return rows.map(fmt);
+    },
+
+    // Returns only available items with category details — for ordering/waiter views
     async findAvailable() {
         const [rows] = await pool.query(`
             SELECT m.*,

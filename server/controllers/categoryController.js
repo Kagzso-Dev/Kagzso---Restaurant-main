@@ -1,11 +1,16 @@
 const Category = require('../models/Category');
 
-// @desc    Get all active categories
+// @desc    Get categories
 // @route   GET /api/categories
 // @access  Private
+// Admin receives ALL categories (including inactive) for management.
+// All other roles receive only active categories for ordering views.
 const getCategories = async (req, res) => {
     try {
-        res.json(await Category.findActive());
+        const categories = req.role === 'admin'
+            ? await Category.findAll()
+            : await Category.findActive();
+        res.json(categories);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

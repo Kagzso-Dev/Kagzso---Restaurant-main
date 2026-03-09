@@ -1,8 +1,14 @@
 -- ============================================================
--- Kagzso Restaurant POS — MySQL Schema
+-- Kagzso Restaurant POS — MySQL Schema  (v2)
 -- Compatible with MySQL 5.7+ / MariaDB 10.3+
--- Run this once on your Vultr MySQL server:
+--
+-- Run once on a fresh database:
 --   mysql -u posuser -p kagzso_pos < schema.sql
+--
+-- Safe to re-run on an existing database:
+--   • All CREATE TABLE use IF NOT EXISTS
+--   • ALTER TABLE statements are wrapped in stored procedures
+--     that check IF the change is still needed
 -- ============================================================
 
 CREATE DATABASE IF NOT EXISTS kagzso_pos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -67,6 +73,7 @@ CREATE TABLE IF NOT EXISTS `tables` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- ─── Orders ──────────────────────────────────────────────────────────────────
+-- NOTE: payment_method includes 'online' for Razorpay/webhook payments
 CREATE TABLE IF NOT EXISTS orders (
     id               INT UNSIGNED    NOT NULL AUTO_INCREMENT,
     order_number     VARCHAR(50)     NOT NULL,
@@ -77,7 +84,7 @@ CREATE TABLE IF NOT EXISTS orders (
     customer_phone   VARCHAR(20),
     order_status     ENUM('pending','accepted','preparing','ready','completed','cancelled') NOT NULL DEFAULT 'pending',
     payment_status   ENUM('pending','payment_pending','paid') NOT NULL DEFAULT 'pending',
-    payment_method   ENUM('cash','qr','upi','credit_card') DEFAULT NULL,
+    payment_method   ENUM('cash','qr','upi','credit_card','online') DEFAULT NULL,
     kot_status       ENUM('Open','Closed') NOT NULL DEFAULT 'Open',
     total_amount     DECIMAL(10,2)   NOT NULL,
     tax              DECIMAL(10,2)   NOT NULL DEFAULT 0.00,
@@ -113,7 +120,7 @@ CREATE TABLE IF NOT EXISTS order_items (
     quantity     INT             NOT NULL DEFAULT 1,
     notes        TEXT,
     status       ENUM('PENDING','PREPARING','READY','SERVED','CANCELLED') NOT NULL DEFAULT 'PENDING',
-    cancelled_by ENUM('WAITER','KITCHEN') DEFAULT NULL,
+    cancelled_by ENUM('WAITER','KITCHEN','ADMIN') DEFAULT NULL,
     cancel_reason VARCHAR(500),
     cancelled_at TIMESTAMP       NULL DEFAULT NULL,
     created_at   TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -216,10 +223,86 @@ CREATE TABLE IF NOT EXISTS counters (
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- ─── Daily Analytics Cache ────────────────────────────────────────────────────
+-- Pre-aggregated per-day revenue snapshot. Updated nightly or on-demand.
+-- Avoids running heavy aggregations on the orders table for dashboard queries.
+CREATE TABLE IF NOT EXISTS daily_analytics (
+    id              INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+    date            DATE            NOT NULL,
+    total_orders    INT UNSIGNED    NOT NULL DEFAULT 0,
+    completed_orders INT UNSIGNED   NOT NULL DEFAULT 0,
+    cancelled_orders INT UNSIGNED   NOT NULL DEFAULT 0,
+    total_revenue   DECIMAL(12,2)   NOT NULL DEFAULT 0.00,
+    avg_order_value DECIMAL(10,2)   NOT NULL DEFAULT 0.00,
+    dine_in_orders  INT UNSIGNED    NOT NULL DEFAULT 0,
+    takeaway_orders INT UNSIGNED    NOT NULL DEFAULT 0,
+    cash_revenue    DECIMAL(12,2)   NOT NULL DEFAULT 0.00,
+    digital_revenue DECIMAL(12,2)   NOT NULL DEFAULT 0.00,
+    created_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uq_date (date),
+    KEY idx_date (date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- ─── Seed Data ────────────────────────────────────────────────────────────────
 -- Initial counter row for order token numbering
 INSERT IGNORE INTO counters (id, sequence_value) VALUES ('tokenNumber_global', 0);
 
--- Default restaurant settings (auto-created on first API call, but seeding avoids latency)
+-- Default restaurant settings (auto-created on first API call too, but seeding avoids the latency)
 INSERT IGNORE INTO settings (id, restaurant_name, currency, currency_symbol, tax_rate, gst_number)
-VALUES (1, 'My Restaurant', 'USD', '$', 5.00, '');
+VALUES (1, 'KAGSZO Restaurant', 'INR', '₹', 5.00, '');
+
+-- ─── Safe Migrations for Existing Installations ──────────────────────────────
+-- These ALTER statements add new values/columns to existing tables without
+-- breaking anything. Safe to run repeatedly (errors are silently ignored by
+-- wrapping in stored procedures with IF column doesn't exist checks).
+
+-- Add 'online' to orders.payment_method ENUM if not already present
+-- MySQL does not support IF NOT EXISTS for ALTER TABLE MODIFY, so we use
+-- a procedure that checks the INFORMATION_SCHEMA first.
+DROP PROCEDURE IF EXISTS sp_migrate_orders_payment_method;
+DELIMITER $$
+CREATE PROCEDURE sp_migrate_orders_payment_method()
+BEGIN
+    DECLARE col_def TEXT;
+    SELECT COLUMN_TYPE INTO col_def
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'orders'
+      AND COLUMN_NAME  = 'payment_method'
+    LIMIT 1;
+
+    -- Only run ALTER if 'online' is not already in the ENUM
+    IF col_def IS NOT NULL AND LOCATE('online', col_def) = 0 THEN
+        ALTER TABLE orders
+            MODIFY COLUMN payment_method
+            ENUM('cash','qr','upi','credit_card','online') DEFAULT NULL;
+    END IF;
+END$$
+DELIMITER ;
+CALL sp_migrate_orders_payment_method();
+DROP PROCEDURE IF EXISTS sp_migrate_orders_payment_method;
+
+-- Add 'ADMIN' to order_items.cancelled_by ENUM if not already present
+DROP PROCEDURE IF EXISTS sp_migrate_items_cancelled_by;
+DELIMITER $$
+CREATE PROCEDURE sp_migrate_items_cancelled_by()
+BEGIN
+    DECLARE col_def TEXT;
+    SELECT COLUMN_TYPE INTO col_def
+    FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME   = 'order_items'
+      AND COLUMN_NAME  = 'cancelled_by'
+    LIMIT 1;
+
+    IF col_def IS NOT NULL AND LOCATE('ADMIN', col_def) = 0 THEN
+        ALTER TABLE order_items
+            MODIFY COLUMN cancelled_by
+            ENUM('WAITER','KITCHEN','ADMIN') DEFAULT NULL;
+    END IF;
+END$$
+DELIMITER ;
+CALL sp_migrate_items_cancelled_by();
+DROP PROCEDURE IF EXISTS sp_migrate_items_cancelled_by;

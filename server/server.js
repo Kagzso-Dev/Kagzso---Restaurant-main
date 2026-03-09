@@ -1,6 +1,8 @@
 require('dotenv').config();
 const express    = require('express');
 const http       = require('http');
+const path       = require('path');
+const fs         = require('fs');
 const { Server } = require('socket.io');
 const cors       = require('cors');
 const compression = require('compression');
@@ -15,18 +17,32 @@ const { socketAuthMiddleware, authorizedRoomJoin, authorizedRoleJoin } = require
 const app    = express();
 const server = http.createServer(app);
 
+// ─── Resolve client/dist path (works both locally and on VPS) ────────────────
+const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
+const hasFrontend = fs.existsSync(CLIENT_DIST);
+
 // ─── CORS Configuration ───────────────────────────────────────────────────────
+// When the frontend is served by this same Express server (same-origin), CORS
+// is not needed for browser requests.  We still list allowed origins so that
+// Socket.IO polling and external clients work correctly.
 const allowedOrigins = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'https://kagzso-pos-frontend.onrender.com',
     process.env.CLIENT_URL,
+    // Allow same-server access (browser hitting the VPS IP directly)
+    process.env.VPS_URL,
 ].filter(Boolean);
 
 const corsOptions = {
     origin: function (origin, callback) {
+        // No origin = same-origin request (browser serving from same server)
+        // or curl / mobile app → allow
         if (!origin) return callback(null, true);
-        if (allowedOrigins.indexOf(origin) !== -1 || process.env.NODE_ENV === 'development') {
+        if (
+            allowedOrigins.indexOf(origin) !== -1 ||
+            process.env.NODE_ENV === 'development'
+        ) {
             callback(null, true);
         } else {
             callback(new Error('Not allowed by CORS'));
@@ -38,7 +54,22 @@ const corsOptions = {
 };
 
 // ─── Global Middleware ────────────────────────────────────────────────────────
-app.use(helmet());
+// Helmet with relaxed CSP so the React SPA (inline scripts, WebSocket) works.
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc:  ["'self'"],
+            scriptSrc:   ["'self'", "'unsafe-inline'"],   // Vite chunks need this
+            styleSrc:    ["'self'", "'unsafe-inline'"],
+            imgSrc:      ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc:  ["'self'", 'ws:', 'wss:', 'http:', 'https:'], // Socket.IO
+            fontSrc:     ["'self'", 'data:'],
+            workerSrc:   ["'self'", 'blob:'],
+        },
+    },
+    crossOriginEmbedderPolicy: false,  // allow loading external resources
+}));
+
 app.use(cors(corsOptions));
 app.use(hpp());
 app.use(compression());
@@ -82,7 +113,9 @@ const io = new Server(server, {
 
 io.use(socketAuthMiddleware);
 
-// ─── Routes ──────────────────────────────────────────────────────────────────
+// ─── API Routes ───────────────────────────────────────────────────────────────
+// Must be registered BEFORE static file serving so /api/* never falls through
+// to index.html
 app.use('/api/auth',          require('./routes/authRoutes'));
 app.use('/api/orders',        require('./routes/orderRoutes'));
 app.use('/api/tables',        require('./routes/tableRoutes'));
@@ -133,15 +166,7 @@ const { autoReleaseExpiredReservations } = require('./controllers/tableControlle
 setInterval(() => autoReleaseExpiredReservations(io), 2 * 60 * 1000);
 autoReleaseExpiredReservations(io);
 
-// ─── Health Check ─────────────────────────────────────────────────────────────
-app.get('/', (req, res) => res.json({
-    status:      'ok',
-    message:     'KOT API running',
-    environment: process.env.NODE_ENV || 'development',
-    connections: io.engine.clientsCount,
-}));
-
-// ─── Detailed Health / Diagnostics ────────────────────────────────────────────
+// ─── Health Check (JSON — always available, even without frontend build) ──────
 app.get('/health', async (req, res) => {
     const uptime   = process.uptime();
     const memUsage = process.memoryUsage();
@@ -166,6 +191,7 @@ app.get('/health', async (req, res) => {
         version:     require('./package.json').version || '1.0.0',
         environment: process.env.NODE_ENV || 'development',
         node:        process.version,
+        frontend:    hasFrontend ? 'built' : 'not built (run: npm run build in client/)',
 
         database: {
             state: dbStatus,
@@ -189,6 +215,39 @@ app.get('/health', async (req, res) => {
         pid:   process.pid,
     });
 });
+
+// ─── Serve React Frontend (production build) ──────────────────────────────────
+// This block serves the compiled React SPA for all non-API routes.
+// It MUST come after all /api/* routes to prevent API calls from returning HTML.
+if (hasFrontend) {
+    // Serve static assets (JS, CSS, images) with 1-day cache
+    app.use(express.static(CLIENT_DIST, {
+        maxAge: '1d',
+        etag:   true,
+        // Don't cache index.html so new deployments take effect immediately
+        setHeaders: (res, filePath) => {
+            if (filePath.endsWith('index.html')) {
+                res.setHeader('Cache-Control', 'no-store');
+            }
+        },
+    }));
+
+    // SPA catch-all: every non-asset GET returns index.html so React Router works
+    app.get('*', (req, res) => {
+        res.sendFile(path.join(CLIENT_DIST, 'index.html'));
+    });
+
+    logger.info(`Frontend: serving React build from ${CLIENT_DIST}`);
+} else {
+    // No frontend build yet — return a helpful JSON message at root
+    app.get('/', (req, res) => res.json({
+        status:  'ok',
+        message: 'KOT API is running. Frontend not built yet.',
+        hint:    'Run: cd client && npm install && npm run build',
+        health:  '/health',
+        api:     '/api',
+    }));
+}
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
@@ -255,16 +314,20 @@ const startServer = async () => {
     try {
         await connectDB();
 
-        const PORT = parseInt(process.env.PORT) || 5000;
+        const PORT = parseInt(process.env.PORT) || 5005;
         server.listen(PORT, '0.0.0.0', () => {
             logger.info('Server started', {
-                port:    PORT,
-                env:     process.env.NODE_ENV || 'development',
-                pid:     process.pid,
-                origins: allowedOrigins,
+                port:     PORT,
+                env:      process.env.NODE_ENV || 'development',
+                pid:      process.pid,
+                origins:  allowedOrigins,
+                frontend: hasFrontend ? CLIENT_DIST : 'not built',
             });
             logger.info('Socket.IO ready for multi-device connections');
             logger.info(`Health check: http://localhost:${PORT}/health`);
+            if (hasFrontend) {
+                logger.info(`UI available at: http://localhost:${PORT}`);
+            }
         });
     } catch (err) {
         console.error('CRITICAL: Server startup failed', err);

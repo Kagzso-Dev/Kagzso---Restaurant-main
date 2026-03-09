@@ -1,11 +1,16 @@
 const MenuItem = require('../models/MenuItem');
 
-// @desc    Get all available menu items
+// @desc    Get menu items
 // @route   GET /api/menu
 // @access  Private
+// Admin receives ALL items (including unavailable) for management.
+// All other roles receive only available items for ordering.
 const getMenuItems = async (req, res) => {
     try {
-        res.json(await MenuItem.findAvailable());
+        const items = req.role === 'admin'
+            ? await MenuItem.findAll()
+            : await MenuItem.findAvailable();
+        res.json(items);
     } catch (error) {
         res.status(500).json({ message: error.message });
     }

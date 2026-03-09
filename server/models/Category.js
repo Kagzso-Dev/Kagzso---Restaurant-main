@@ -11,6 +11,14 @@ const fmt = (row) => row ? {
 } : null;
 
 const Category = {
+    // Returns ALL categories regardless of status — for admin management
+    async findAll() {
+        const [rows] = await pool.query(
+            'SELECT * FROM categories ORDER BY name'
+        );
+        return rows.map(fmt);
+    },
+
     async findActive() {
         const [rows] = await pool.query(
             "SELECT * FROM categories WHERE status = 'active' ORDER BY name"

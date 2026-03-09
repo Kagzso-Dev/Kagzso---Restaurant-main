@@ -1,11 +1,14 @@
 const Table = require('../models/Table');
 
 // ─── VALID STATUS TRANSITIONS ────────────────────────────────────────────────
+// occupied → cleaning  : direct path used by paymentController after payment
+// occupied → billing   : optional billing step before final payment
+// billing  → occupied  : allow reverting from billing back to occupied
 const VALID_TRANSITIONS = {
-    available: ['reserved'],
+    available: ['reserved', 'occupied'],    // direct seat for walk-in
     reserved:  ['occupied', 'available'],
-    occupied:  ['billing'],
-    billing:   ['cleaning'],
+    occupied:  ['billing', 'cleaning'],     // cleaning allowed directly (payment flow)
+    billing:   ['cleaning', 'occupied'],    // back to occupied if payment reversed
     cleaning:  ['available'],
 };
 
