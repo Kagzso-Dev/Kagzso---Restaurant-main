@@ -58,15 +58,16 @@ CREATE TABLE IF NOT EXISTS menu_items (
 
 -- ─── Tables (Restaurant Seating) ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS `tables` (
-    id               INT UNSIGNED    NOT NULL AUTO_INCREMENT,
-    number           INT             NOT NULL,
-    capacity         INT             NOT NULL,
-    status           ENUM('available','reserved','occupied','billing','cleaning') NOT NULL DEFAULT 'available',
-    current_order_id INT UNSIGNED    DEFAULT NULL,
-    locked_by        INT UNSIGNED    DEFAULT NULL,
-    reserved_at      TIMESTAMP       NULL DEFAULT NULL,
-    created_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    id                     INT UNSIGNED    NOT NULL AUTO_INCREMENT,
+    number                 INT             NOT NULL,
+    capacity               INT             NOT NULL,
+    status                 ENUM('available','occupied','reserved','cleaning') NOT NULL DEFAULT 'available',
+    current_order_id       INT UNSIGNED    DEFAULT NULL,
+    locked_by              INT UNSIGNED    DEFAULT NULL,
+    reserved_at            DATETIME        DEFAULT NULL,
+    reservation_expires_at DATETIME        DEFAULT NULL,
+    created_at             TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at             TIMESTAMP       NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     PRIMARY KEY (id),
     UNIQUE KEY uq_table_number (number),
     KEY idx_status_reserved (status, reserved_at)
@@ -304,5 +305,38 @@ BEGIN
     END IF;
 END$$
 DELIMITER ;
+-- Add missing columns and update 'tables' schema if needed
+DROP PROCEDURE IF EXISTS sp_migrate_tables_schema;
+DELIMITER $$
+CREATE PROCEDURE sp_migrate_tables_schema()
+BEGIN
+    DECLARE col_exists INT DEFAULT 0;
+
+    -- 1. Add current_order_id if missing
+    SELECT COUNT(*) INTO col_exists FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tables' AND COLUMN_NAME = 'current_order_id';
+    IF col_exists = 0 THEN
+        ALTER TABLE `tables` ADD COLUMN current_order_id INT UNSIGNED DEFAULT NULL AFTER status;
+    END IF;
+
+    -- 2. Add reservation_expires_at if missing
+    SELECT COUNT(*) INTO col_exists FROM INFORMATION_SCHEMA.COLUMNS 
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'tables' AND COLUMN_NAME = 'reservation_expires_at';
+    IF col_exists = 0 THEN
+        ALTER TABLE `tables` ADD COLUMN reservation_expires_at DATETIME DEFAULT NULL AFTER reserved_at;
+    END IF;
+
+    -- 3. Modify reserved_at to DATETIME (from TIMESTAMP)
+    ALTER TABLE `tables` MODIFY COLUMN reserved_at DATETIME DEFAULT NULL;
+
+    -- 4. Update status ENUM (remove 'billing' if present in definition)
+    -- First migrate any existing 'billing' status to 'occupied' to avoid data loss
+    UPDATE `tables` SET status = 'occupied' WHERE status = 'billing';
+    ALTER TABLE `tables` MODIFY COLUMN status ENUM('available','occupied','reserved','cleaning') NOT NULL DEFAULT 'available';
+END$$
+DELIMITER ;
+CALL sp_migrate_tables_schema();
+DROP PROCEDURE IF EXISTS sp_migrate_tables_schema;
+
 CALL sp_migrate_items_cancelled_by();
 DROP PROCEDURE IF EXISTS sp_migrate_items_cancelled_by;

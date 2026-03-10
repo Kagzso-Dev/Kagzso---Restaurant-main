@@ -1,16 +1,20 @@
 const { pool } = require('../config/db');
 
-const fmt = (row) => row ? {
-    _id:            row.id,
-    number:         row.number,
-    capacity:       row.capacity,
-    status:         row.status,
-    currentOrderId: row.current_order_id,
-    lockedBy:       row.locked_by,
-    reservedAt:     row.reserved_at,
-    createdAt:      row.created_at,
-    updatedAt:      row.updated_at,
-} : null;
+const fmt = (row) => {
+    if (!row) return null;
+    return {
+        _id: row.id,
+        number: row.number,
+        capacity: row.capacity,
+        status: row.status,
+        currentOrderId: row.current_order_id || null, // Robustness if column somehow missing but query didn't fail (select *)
+        lockedBy: row.locked_by || null,
+        reservedAt: row.reserved_at || null,
+        reservationExpiresAt: row.reservation_expires_at || null,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+    };
+};
 
 const Table = {
     async findAll() {
@@ -44,13 +48,14 @@ const Table = {
 
     async updateById(id, updates) {
         const fieldMap = {
-            status:         'status',
+            status: 'status',
             currentOrderId: 'current_order_id',
-            lockedBy:       'locked_by',
-            reservedAt:     'reserved_at',
+            lockedBy: 'locked_by',
+            reservedAt: 'reserved_at',
+            reservationExpiresAt: 'reservation_expires_at',
         };
         const setClauses = [];
-        const params     = [];
+        const params = [];
         for (const [key, val] of Object.entries(updates)) {
             const col = fieldMap[key] || key;
             setClauses.push(`\`${col}\` = ?`);

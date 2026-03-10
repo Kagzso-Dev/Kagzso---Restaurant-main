@@ -6,10 +6,9 @@ const Table = require('../models/Table');
 // billing  → occupied  : allow reverting from billing back to occupied
 const VALID_TRANSITIONS = {
     available: ['reserved', 'occupied'],    // direct seat for walk-in
-    reserved:  ['occupied', 'available'],
-    occupied:  ['billing', 'cleaning'],     // cleaning allowed directly (payment flow)
-    billing:   ['cleaning', 'occupied'],    // back to occupied if payment reversed
-    cleaning:  ['available'],
+    reserved: ['occupied', 'available'],
+    occupied: ['cleaning'],                // cleaning allowed directly (payment flow)
+    cleaning: ['available'],
 };
 
 // @desc    Get all tables
@@ -17,8 +16,17 @@ const VALID_TRANSITIONS = {
 // @access  Private
 const getTables = async (req, res) => {
     try {
-        res.json(await Table.findAll());
+        const tables = await Table.findAll();
+        res.json(tables);
     } catch (error) {
+        // Handle case where schema might be missing columns during first run
+        if (error.code === 'ER_BAD_FIELD_ERROR') {
+            console.error('[TableController] Schema mismatch:', error.message);
+            return res.status(500).json({
+                message: 'Database schema mismatch. Please restart the backend server to run migrations.',
+                error: error.message,
+            });
+        }
         res.status(500).json({ message: error.message });
     }
 };
@@ -63,16 +71,17 @@ const updateTable = async (req, res) => {
         if (status) {
             updates.status = status;
             if (status === 'available') {
-                updates.lockedBy       = null;
-                updates.reservedAt     = null;
+                updates.lockedBy = null;
+                updates.reservedAt = null;
+                updates.reservationExpiresAt = null;
                 updates.currentOrderId = null;
             }
         }
 
         const updated = await Table.updateById(req.params.id, updates);
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId:  updated._id,
-            status:   updated.status,
+            tableId: updated._id,
+            status: updated.status,
             lockedBy: updated.lockedBy,
         });
         res.json(updated);
@@ -97,8 +106,8 @@ const reserveTable = async (req, res) => {
             });
         }
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-            tableId:  table._id,
-            status:   'reserved',
+            tableId: table._id,
+            status: 'reserved',
             lockedBy: table.lockedBy,
         });
         res.json(table);
@@ -122,7 +131,11 @@ const releaseTable = async (req, res) => {
             });
         }
         const updated = await Table.updateById(req.params.id, {
-            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
+            status: 'available',
+            lockedBy: null,
+            reservedAt: null,
+            reservationExpiresAt: null,
+            currentOrderId: null,
         });
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
             tableId: updated._id, status: 'available',
@@ -148,7 +161,11 @@ const markTableClean = async (req, res) => {
             });
         }
         const updated = await Table.updateById(req.params.id, {
-            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
+            status: 'available',
+            lockedBy: null,
+            reservedAt: null,
+            reservationExpiresAt: null,
+            currentOrderId: null,
         });
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
             tableId: updated._id, status: 'available',
@@ -169,7 +186,11 @@ const forceResetTable = async (req, res) => {
             return res.status(404).json({ message: 'Table not found' });
         }
         const updated = await Table.updateById(req.params.id, {
-            status: 'available', lockedBy: null, reservedAt: null, currentOrderId: null,
+            status: 'available',
+            lockedBy: null,
+            reservedAt: null,
+            reservationExpiresAt: null,
+            currentOrderId: null,
         });
         req.app.get('socketio').to('restaurant_main').emit('table-updated', {
             tableId: updated._id, status: 'available',
@@ -202,14 +223,20 @@ const deleteTable = async (req, res) => {
 };
 
 // ─── AUTO-RELEASE expired reservations (runs on a timer) ─────────────────────
+// Tables reserved for more than 10 minutes without an order attached are
+// automatically returned to 'available'.  This runs every 2 minutes and once
+// immediately on startup (see server.js).
 const autoReleaseExpiredReservations = async (io) => {
     const TEN_MINUTES = 10 * 60 * 1000;
-    const cutoff      = new Date(Date.now() - TEN_MINUTES);
+    const cutoff = new Date(Date.now() - TEN_MINUTES);
     try {
         const expiredTables = await Table.findExpiredReservations(cutoff);
         for (const table of expiredTables) {
             await Table.updateById(table._id, {
-                status: 'available', lockedBy: null, reservedAt: null,
+                status: 'available',
+                lockedBy: null,
+                reservedAt: null,
+                reservationExpiresAt: null,
             });
             if (io) {
                 io.to('restaurant_main').emit('table-updated', {
@@ -217,8 +244,20 @@ const autoReleaseExpiredReservations = async (io) => {
                 });
             }
         }
+        if (expiredTables.length > 0) {
+            console.log(`[AutoRelease] Released ${expiredTables.length} expired reservation(s)`);
+        }
     } catch (error) {
-        console.error('Auto-release error:', error.message);
+        // ER_BAD_FIELD_ERROR = unknown column — schema migration likely pending
+        if (error.code === 'ER_BAD_FIELD_ERROR') {
+            console.error(
+                '[AutoRelease] Schema mismatch detected:', error.message,
+                '\n  → The `tables` table is missing required columns.',
+                '\n  → Run the ALTER TABLE commands or restart after schema migration.'
+            );
+        } else {
+            console.error('[AutoRelease] Unexpected error:', error.message);
+        }
     }
 };
 

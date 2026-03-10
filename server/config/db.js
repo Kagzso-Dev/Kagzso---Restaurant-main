@@ -1,4 +1,4 @@
-const mysql  = require('mysql2/promise');
+const mysql = require('mysql2/promise');
 const logger = require('../utils/logger');
 
 /**
@@ -11,19 +11,19 @@ const logger = require('../utils/logger');
  *     the server never crashes with "Table X doesn't exist"
  */
 const pool = mysql.createPool({
-    host:               process.env.DB_HOST     || 'localhost',
-    port:               parseInt(process.env.DB_PORT) || 3306,
-    user:               process.env.DB_USER,
-    password:           process.env.DB_PASSWORD,
-    database:           process.env.DB_NAME,
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT) || 3306,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
     waitForConnections: true,
-    connectionLimit:    parseInt(process.env.DB_POOL_SIZE) || 10,
-    queueLimit:         0,
-    enableKeepAlive:    true,
+    connectionLimit: parseInt(process.env.DB_POOL_SIZE) || 10,
+    queueLimit: 0,
+    enableKeepAlive: true,
     keepAliveInitialDelay: 0,
-    timezone:           '+00:00',
-    supportBigNumbers:  true,
-    bigNumberStrings:   false,
+    timezone: '+00:00',
+    supportBigNumbers: true,
+    bigNumberStrings: false,
     multipleStatements: false,  // keep false for security; DDL runs through ensureSchema
 });
 
@@ -79,15 +79,16 @@ const REQUIRED_TABLES = [
     {
         name: 'tables',
         ddl: `CREATE TABLE IF NOT EXISTS \`tables\` (
-            id               INT UNSIGNED NOT NULL AUTO_INCREMENT,
-            number           INT          NOT NULL,
-            capacity         INT          NOT NULL,
-            status           ENUM('available','reserved','occupied','billing','cleaning') NOT NULL DEFAULT 'available',
-            current_order_id INT UNSIGNED DEFAULT NULL,
-            locked_by        INT UNSIGNED DEFAULT NULL,
-            reserved_at      TIMESTAMP NULL DEFAULT NULL,
-            created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            id                     INT UNSIGNED NOT NULL AUTO_INCREMENT,
+            number                 INT          NOT NULL,
+            capacity               INT          NOT NULL,
+            status                 ENUM('available','occupied','reserved','cleaning') NOT NULL DEFAULT 'available',
+            current_order_id       INT UNSIGNED DEFAULT NULL,
+            locked_by              INT UNSIGNED DEFAULT NULL,
+            reserved_at            DATETIME DEFAULT NULL,
+            reservation_expires_at DATETIME DEFAULT NULL,
+            created_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at             TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
             PRIMARY KEY (id),
             UNIQUE KEY uq_table_number (number),
             KEY idx_status_reserved (status, reserved_at)
@@ -274,30 +275,109 @@ const REQUIRED_TABLES = [
     },
 ];
 
+// ─── Required column migrations ──────────────────────────────────────────────
+// Each entry describes a column that MUST exist in an already-created table.
+// If the column is absent the ALTER TABLE is run automatically on startup.
+// Add new entries here whenever a column is added to the schema — NEVER remove
+// old entries so that older databases are always brought forward cleanly.
+const REQUIRED_COLUMNS = [
+    // ── tables ───────────────────────────────────────────────────────────────
+    // These three columns were added after the initial release; databases that
+    // were created manually (or before the schema was updated) will be missing
+    // them, causing "Unknown column 'reserved_at' in 'where clause'" errors.
+    {
+        table: 'tables',
+        column: 'current_order_id',
+        ddl: 'ALTER TABLE `tables` ADD COLUMN current_order_id INT UNSIGNED DEFAULT NULL AFTER status',
+    },
+    {
+        table: 'tables',
+        column: 'locked_by',
+        ddl: 'ALTER TABLE `tables` ADD COLUMN locked_by INT UNSIGNED DEFAULT NULL AFTER current_order_id',
+    },
+    {
+        table: 'tables',
+        column: 'reserved_at',
+        ddl: 'ALTER TABLE `tables` MODIFY COLUMN reserved_at DATETIME DEFAULT NULL',
+    },
+    {
+        table: 'tables',
+        column: 'reservation_expires_at',
+        ddl: 'ALTER TABLE `tables` ADD COLUMN reservation_expires_at DATETIME DEFAULT NULL AFTER reserved_at',
+    },
+    {
+        table: 'tables',
+        column: 'status',
+        ddl: "ALTER TABLE `tables` MODIFY COLUMN status ENUM('available','occupied','reserved','cleaning') NOT NULL DEFAULT 'available'",
+    },
+    // ── orders ───────────────────────────────────────────────────────────────
+    // paid_at was added alongside payment_at; older schemas may only have payment_at
+    {
+        table: 'orders',
+        column: 'paid_at',
+        ddl: 'ALTER TABLE orders ADD COLUMN paid_at TIMESTAMP NULL DEFAULT NULL AFTER payment_at',
+    },
+    // ── order_items ──────────────────────────────────────────────────────────
+    // cancelled_at tracks when an item was cancelled
+    {
+        table: 'order_items',
+        column: 'cancelled_at',
+        ddl: 'ALTER TABLE order_items ADD COLUMN cancelled_at TIMESTAMP NULL DEFAULT NULL AFTER cancel_reason',
+    },
+];
+
 /**
  * Verifies every required table exists and creates missing ones.
- * Called once during server startup — never touches existing data.
+ * Then verifies every required column exists and adds missing ones.
+ * Called once during server startup — never destructive to existing data.
  */
 const ensureSchema = async () => {
     const conn = await pool.getConnection();
     try {
-        // Get list of existing tables
-        const [rows] = await conn.query(
+        const db = process.env.DB_NAME;
+
+        // ── 1. Ensure all tables exist ────────────────────────────────────
+        const [tableRows] = await conn.query(
             'SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE()'
         );
-        const existing = new Set(rows.map(r => r.TABLE_NAME.toLowerCase()));
+        const existingTables = new Set(tableRows.map(r => r.TABLE_NAME.toLowerCase()));
 
-        let created = 0;
+        let createdTables = 0;
         for (const { name, ddl } of REQUIRED_TABLES) {
-            if (!existing.has(name.toLowerCase())) {
+            if (!existingTables.has(name.toLowerCase())) {
                 logger.warn(`Table "${name}" missing — creating now...`);
                 await conn.query(ddl);
                 logger.info(`Table "${name}" created successfully`);
-                created++;
+                createdTables++;
+                existingTables.add(name.toLowerCase()); // mark as now existing
             }
         }
 
-        // Seed essential rows that must exist
+        // ── 2. Ensure all required columns exist ──────────────────────────
+        // Fetch every column currently in the database in one query
+        const [colRows] = await conn.query(
+            `SELECT TABLE_NAME, COLUMN_NAME
+             FROM INFORMATION_SCHEMA.COLUMNS
+             WHERE TABLE_SCHEMA = DATABASE()`
+        );
+        // Build a Set of "tablename.columnname" for fast lookup
+        const existingCols = new Set(
+            colRows.map(r => `${r.TABLE_NAME.toLowerCase()}.${r.COLUMN_NAME.toLowerCase()}`)
+        );
+
+        let addedCols = 0;
+        for (const { table, column, ddl } of REQUIRED_COLUMNS) {
+            const key = `${table.toLowerCase()}.${column.toLowerCase()}`;
+            if (!existingCols.has(key)) {
+                logger.warn(`Column "${table}.${column}" missing — adding now...`);
+                await conn.query(ddl);
+                logger.info(`Column "${table}.${column}" added successfully`);
+                addedCols++;
+                existingCols.add(key);
+            }
+        }
+
+        // ── 3. Seed essential rows ────────────────────────────────────────
         await conn.query(
             `INSERT IGNORE INTO counters (id, sequence_value) VALUES ('tokenNumber_global', 0)`
         );
@@ -306,10 +386,13 @@ const ensureSchema = async () => {
              VALUES (1, 'KAGSZO Restaurant', 'INR', '₹', 5.00, '')`
         );
 
-        if (created > 0) {
-            logger.info(`Schema check complete — ${created} table(s) auto-created`);
+        const total = createdTables + addedCols;
+        if (total > 0) {
+            logger.info(
+                `Schema migration complete — ${createdTables} table(s) created, ${addedCols} column(s) added`
+            );
         } else {
-            logger.info('Schema check complete — all tables present');
+            logger.info('Schema check complete — all tables and columns present');
         }
     } finally {
         conn.release();
@@ -322,8 +405,8 @@ const connectDB = async () => {
         await conn.ping();
         conn.release();
         logger.info('MySQL connected', {
-            host:      process.env.DB_HOST,
-            database:  process.env.DB_NAME,
+            host: process.env.DB_HOST,
+            database: process.env.DB_NAME,
             poolLimit: parseInt(process.env.DB_POOL_SIZE) || 10,
         });
 
@@ -332,8 +415,8 @@ const connectDB = async () => {
     } catch (error) {
         logger.error('MySQL connection failed', {
             error: error.message,
-            host:  process.env.DB_HOST,
-            db:    process.env.DB_NAME,
+            host: process.env.DB_HOST,
+            db: process.env.DB_NAME,
         });
         process.exit(1);
     }

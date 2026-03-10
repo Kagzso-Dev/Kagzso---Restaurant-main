@@ -1,0 +1,28 @@
+{
+    "dbcode.connections": [
+        {
+            "connectionId": "iWdd6oH8jwYRK_BF5Zlqp",
+            "name": "KAGZSO_POS_LOCAL",
+            "driver": "mysql",
+            "connectionType": "host",
+            "host": "localhost",
+            "port": 3306,
+            "ssl": false,
+            "username": "posuser",
+            "password": "",
+            "savePassword": "secretStorage",
+            "database": "kagzso_pos",
+            "readOnly": false,
+            "postConnectionSqlType": "inline",
+            "connectionTimeout": 30,
+            "pinnedConnectionTimeout": "0",
+            "driverOptions": {
+                "retrievePublickey": true,
+                "disableMultiStatements": false
+            },
+            "introspection": {
+                "progressive": false
+            }
+        }
+    ]
+}

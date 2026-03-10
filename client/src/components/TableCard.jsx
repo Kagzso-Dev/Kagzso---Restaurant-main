@@ -38,17 +38,6 @@ export const STATUS_CONFIG = {
         label: 'Occupied',
         icon: Users,
     },
-    billing: {
-        bg: 'bg-orange-900/20',
-        border: 'border-orange-500/50',
-        hoverBg: '',
-        text: 'text-orange-400',
-        dot: 'bg-orange-500',
-        color: 'bg-orange-500',
-        ring: 'ring-orange-500/30',
-        label: 'Billing',
-        icon: AlertTriangle,
-    },
     cleaning: {
         bg: 'bg-gray-700/30',
         border: 'border-gray-500/50',
