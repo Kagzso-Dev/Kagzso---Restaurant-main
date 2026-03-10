@@ -239,7 +239,7 @@ if (hasFrontend) {
     // wildcards to be named.  The old bare '*' pattern throws at startup:
     //   TypeError: Missing parameter name at index 1: *
     // Solution: use the named wildcard syntax '/{*splat}'.
-    app.get('/{*splat}', (req, res) => {
+    app.get('/{*splat}', (_req, res) => {
         res.sendFile(path.join(CLIENT_DIST, 'index.html'));
     });
 
