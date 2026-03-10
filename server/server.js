@@ -22,30 +22,29 @@ const CLIENT_DIST = path.join(__dirname, '..', 'client', 'dist');
 const hasFrontend = fs.existsSync(CLIENT_DIST);
 
 // ─── CORS Configuration ───────────────────────────────────────────────────────
-// When the frontend is served by this same Express server (same-origin), CORS
-// is not needed for browser requests.  We still list allowed origins so that
-// Socket.IO polling and external clients work correctly.
+// Set CLIENT_URL or FRONTEND_URL in your .env to your Netlify URL, e.g.:
+//   CLIENT_URL=https://your-app.netlify.app
 const allowedOrigins = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
     'https://kagzso-pos-frontend.onrender.com',
-    process.env.CLIENT_URL,
-    // Allow same-server access (browser hitting the VPS IP directly)
-    process.env.VPS_URL,
+    process.env.CLIENT_URL,    // Primary: set this to your Netlify/CDN URL
+    process.env.FRONTEND_URL,  // Alias for CLIENT_URL
+    process.env.VPS_URL,       // Direct VPS IP/hostname if needed
 ].filter(Boolean);
 
 const corsOptions = {
     origin: function (origin, callback) {
-        // No origin = same-origin request (browser serving from same server)
-        // or curl / mobile app → allow
+        // No origin = same-origin request (curl, mobile app, or same-server) → allow
         if (!origin) return callback(null, true);
         if (
-            allowedOrigins.indexOf(origin) !== -1 ||
+            allowedOrigins.includes(origin) ||
             process.env.NODE_ENV === 'development'
         ) {
             callback(null, true);
         } else {
-            callback(new Error('Not allowed by CORS'));
+            logger.warn('CORS blocked', { origin });
+            callback(new Error(`CORS: origin '${origin}' not in allowed list`));
         }
     },
     credentials: true,
@@ -59,15 +58,15 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'"],   // Vite chunks need this
-            styleSrc: ["'self'", "'unsafe-inline'"],
-            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-            connectSrc: ["'self'", 'ws:', 'wss:', 'http:', 'https:'], // Socket.IO
-            fontSrc: ["'self'", 'data:'],
-            workerSrc: ["'self'", 'blob:'],
+            scriptSrc:  ["'self'", "'unsafe-inline'"],
+            styleSrc:   ["'self'", "'unsafe-inline'"],
+            imgSrc:     ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc: ["'self'", 'ws:', 'wss:', 'http:', 'https:'],
+            fontSrc:    ["'self'", 'data:'],
+            workerSrc:  ["'self'", 'blob:'],
         },
     },
-    crossOriginEmbedderPolicy: false,  // allow loading external resources
+    crossOriginEmbedderPolicy: false,
 }));
 
 app.use(cors(corsOptions));
@@ -115,25 +114,25 @@ io.use(socketAuthMiddleware);
 
 // ─── API Routes ───────────────────────────────────────────────────────────────
 // Must be registered BEFORE static file serving so /api/* never falls through
-// to index.html
-app.use('/api/auth', require('./routes/authRoutes'));
-app.use('/api/orders', require('./routes/orderRoutes'));
-app.use('/api/tables', require('./routes/tableRoutes'));
-app.use('/api/menu', require('./routes/menuRoutes'));
-app.use('/api/categories', require('./routes/categoryRoutes'));
-app.use('/api/settings', require('./routes/settingRoutes'));
-app.use('/api/dashboard', require('./routes/dashboardRoutes'));
-app.use('/api/analytics', require('./routes/analyticsRoutes'));
-app.use('/api/payments', require('./routes/paymentRoutes'));
-app.use('/api/notifications', require('./routes/notificationRoutes'));
-app.use('/api/webhooks', require('./routes/webhookRoutes'));
+// to index.html.
+app.use('/api/auth',           require('./routes/authRoutes'));
+app.use('/api/orders',         require('./routes/orderRoutes'));
+app.use('/api/tables',         require('./routes/tableRoutes'));
+app.use('/api/menu',           require('./routes/menuRoutes'));
+app.use('/api/categories',     require('./routes/categoryRoutes'));
+app.use('/api/settings',       require('./routes/settingRoutes'));
+app.use('/api/dashboard',      require('./routes/dashboardRoutes'));
+app.use('/api/analytics',      require('./routes/analyticsRoutes'));
+app.use('/api/payments',       require('./routes/paymentRoutes'));
+app.use('/api/notifications',  require('./routes/notificationRoutes'));
+app.use('/api/webhooks',       require('./routes/webhookRoutes'));
 
 // ─── Socket.IO Events ────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
     logger.info('Socket connected', {
         socketId: socket.id,
-        userId: socket.userId,
-        role: socket.role,
+        userId:   socket.userId,
+        role:     socket.role,
     });
 
     socket.on('join-branch', () => {
@@ -162,19 +161,18 @@ io.on('connection', (socket) => {
 app.set('socketio', io);
 
 // ─── Auto-Release Timer (reserved tables idle > 10 min) ──────────────────────
+// The recurring interval starts immediately; the INITIAL run is deferred to
+// startServer() so the DB connection is guaranteed to be ready first.
 const { autoReleaseExpiredReservations } = require('./controllers/tableController');
 setInterval(() => autoReleaseExpiredReservations(io), 2 * 60 * 1000);
-autoReleaseExpiredReservations(io);
 
 // ─── Health Check (JSON — always available, even without frontend build) ──────
 app.get('/health', async (req, res) => {
-    const uptime = process.uptime();
+    const uptime   = process.uptime();
     const memUsage = process.memoryUsage();
 
     // Check MySQL connectivity
     let dbStatus = 'disconnected';
-    let dbHost = process.env.DB_HOST || 'N/A';
-    let dbName = process.env.DB_NAME || 'N/A';
     try {
         const conn = await pool.getConnection();
         await conn.ping();
@@ -184,56 +182,64 @@ app.get('/health', async (req, res) => {
         dbStatus = 'error';
     }
 
+    // Guard against a missing or malformed package.json on the VPS
+    let version = '1.0.0';
+    try { version = require('./package.json').version || '1.0.0'; } catch { /* ignore */ }
+
     res.json({
-        status: dbStatus === 'connected' ? 'healthy' : 'degraded',
-        timestamp: new Date().toISOString(),
-        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
-        version: require('./package.json').version || '1.0.0',
+        status:      dbStatus === 'connected' ? 'healthy' : 'degraded',
+        timestamp:   new Date().toISOString(),
+        uptime:      `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
+        version,
         environment: process.env.NODE_ENV || 'development',
-        node: process.version,
-        frontend: hasFrontend ? 'built' : 'not built (run: npm run build in client/)',
+        node:        process.version,
+        frontend:    hasFrontend ? 'built' : 'not built (run: npm run build in client/)',
 
         database: {
             state: dbStatus,
-            host: dbHost,
-            name: dbName,
+            host:  process.env.DB_HOST || 'N/A',
+            name:  process.env.DB_NAME || 'N/A',
         },
 
         sockets: {
             connected: io.engine.clientsCount,
-            rooms: io.sockets.adapter.rooms.size,
+            rooms:     io.sockets.adapter.rooms.size,
         },
 
         memory: {
-            rss: `${(memUsage.rss / 1024 / 1024).toFixed(1)} MB`,
-            heapUsed: `${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`,
+            rss:       `${(memUsage.rss       / 1024 / 1024).toFixed(1)} MB`,
+            heapUsed:  `${(memUsage.heapUsed  / 1024 / 1024).toFixed(1)} MB`,
             heapTotal: `${(memUsage.heapTotal / 1024 / 1024).toFixed(1)} MB`,
-            external: `${(memUsage.external / 1024 / 1024).toFixed(1)} MB`,
+            external:  `${(memUsage.external  / 1024 / 1024).toFixed(1)} MB`,
         },
 
         cache: getCacheStats(),
-        pid: process.pid,
+        pid:   process.pid,
     });
 });
 
 // ─── Serve React Frontend (production build) ──────────────────────────────────
-// This block serves the compiled React SPA for all non-API routes.
-// It MUST come after all /api/* routes to prevent API calls from returning HTML.
+// MUST come after all /api/* routes so API calls never return index.html.
 if (hasFrontend) {
-    // Serve static assets (JS, CSS, images) with 1-day cache
+    // Static assets (JS, CSS, images) — 1-day browser cache
     app.use(express.static(CLIENT_DIST, {
         maxAge: '1d',
-        etag: true,
-        // Don't cache index.html so new deployments take effect immediately
+        etag:   true,
         setHeaders: (res, filePath) => {
+            // Never cache index.html so new deployments take effect immediately
             if (filePath.endsWith('index.html')) {
                 res.setHeader('Cache-Control', 'no-store');
             }
         },
     }));
 
-    // SPA catch-all: every non-asset GET returns index.html so React Router works
-    app.get('*', (req, res) => {
+    // SPA catch-all: every non-asset GET returns index.html for React Router.
+    //
+    // FIX (Express v5): Express v5 uses path-to-regexp v8, which requires all
+    // wildcards to be named.  The old bare '*' pattern throws at startup:
+    //   TypeError: Missing parameter name at index 1: *
+    // Solution: use the named wildcard syntax '/{*splat}'.
+    app.get('/{*splat}', (req, res) => {
         res.sendFile(path.join(CLIENT_DIST, 'index.html'));
     });
 
@@ -241,43 +247,50 @@ if (hasFrontend) {
 } else {
     // No frontend build yet — return a helpful JSON message at root
     app.get('/', (req, res) => res.json({
-        status: 'ok',
+        status:  'ok',
         message: 'KOT API is running. Frontend not built yet.',
-        hint: 'Run: cd client && npm install && npm run build',
-        health: '/health',
-        api: '/api',
+        hint:    'Run: cd client && npm install && npm run build',
+        health:  '/health',
+        api:     '/api',
     }));
 }
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
+// Express v5: async route errors are automatically forwarded here without
+// needing an explicit next(err) call.
+// Checks both err.statusCode (custom errors) and err.status (set by Express).
 app.use((err, req, res, next) => {
     logger.error('Unhandled route error', {
-        error: err.message,
-        stack: err.stack,
-        method: req.method,
-        url: req.originalUrl,
+        error:     err.message,
+        stack:     err.stack,
+        method:    req.method,
+        url:       req.originalUrl,
         requestId: req.requestId,
     });
-    const statusCode = err.statusCode || 500;
+    const statusCode = err.statusCode || err.status || 500;
     res.status(statusCode).json({
-        success: false,
-        message: err.message || 'Internal Server Error',
+        success:   false,
+        message:   err.message || 'Internal Server Error',
         requestId: req.requestId,
-        stack: process.env.NODE_ENV === 'production' ? null : err.stack,
+        ...(process.env.NODE_ENV !== 'production' && { stack: err.stack }),
     });
 });
 
-// ─── Graceful Shutdown ───────────────────────────────────────────────────────
+// ─── Graceful Shutdown ────────────────────────────────────────────────────────
 const shutdown = async (signal) => {
     logger.info(`${signal} received — shutting down gracefully...`);
 
-    server.close(() => {
-        logger.info('HTTP server closed');
-    });
+    // Force-exit fallback in case something hangs.
+    // .unref() lets the event loop exit naturally if everything closes before
+    // the 10-second deadline without needing this timer to fire.
+    const forceExit = setTimeout(() => {
+        logger.error('Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000);
+    forceExit.unref();
 
-    io.close(() => {
-        logger.info('Socket.IO server closed');
-    });
+    server.close(() => logger.info('HTTP server closed'));
+    io.close(()     => logger.info('Socket.IO server closed'));
 
     try {
         await pool.end();
@@ -286,18 +299,14 @@ const shutdown = async (signal) => {
         logger.error('Error closing MySQL pool', { error: err.message });
     }
 
-    setTimeout(() => {
-        logger.error('Forced shutdown after timeout');
-        process.exit(1);
-    }, 10000);
-
+    clearTimeout(forceExit);
     process.exit(0);
 };
 
 process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled Promise Rejection', {
         reason: reason?.message || reason,
-        stack: reason?.stack,
+        stack:  reason?.stack,
     });
 });
 
@@ -307,7 +316,7 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const startServer = async () => {
@@ -317,18 +326,22 @@ const startServer = async () => {
         const PORT = parseInt(process.env.PORT) || 5005;
         server.listen(PORT, '0.0.0.0', () => {
             logger.info('Server started', {
-                port: PORT,
-                env: process.env.NODE_ENV || 'development',
-                pid: process.pid,
-                origins: allowedOrigins,
+                port:     PORT,
+                env:      process.env.NODE_ENV || 'development',
+                pid:      process.pid,
+                origins:  allowedOrigins,
                 frontend: hasFrontend ? CLIENT_DIST : 'not built',
             });
             logger.info('Socket.IO ready for multi-device connections');
             logger.info(`Health check: http://localhost:${PORT}/health`);
-            if (hasFrontend) {
-                logger.info(`UI available at: http://localhost:${PORT}`);
-            }
+            if (hasFrontend) logger.info(`UI available at: http://localhost:${PORT}`);
         });
+
+        // Run the FIRST auto-release check now that DB is confirmed ready.
+        // Subsequent checks run via setInterval above.
+        autoReleaseExpiredReservations(io).catch((err) =>
+            logger.warn('Initial auto-release check failed', { error: err.message })
+        );
     } catch (err) {
         console.error('CRITICAL: Server startup failed', err);
         process.exit(1);
