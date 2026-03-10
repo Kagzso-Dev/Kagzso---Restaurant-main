@@ -1,20 +1,20 @@
 require('dotenv').config();
-const express    = require('express');
-const http       = require('http');
-const path       = require('path');
-const fs         = require('fs');
+const express = require('express');
+const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
-const cors       = require('cors');
+const cors = require('cors');
 const compression = require('compression');
-const rateLimit  = require('express-rate-limit');
-const helmet     = require('helmet');
-const hpp        = require('hpp');
+const rateLimit = require('express-rate-limit');
+const helmet = require('helmet');
+const hpp = require('hpp');
 const { connectDB, pool } = require('./config/db');
-const logger     = require('./utils/logger');
-const { getCacheStats }   = require('./utils/cache');
+const logger = require('./utils/logger');
+const { getCacheStats } = require('./utils/cache');
 const { socketAuthMiddleware, authorizedRoomJoin, authorizedRoleJoin } = require('./middleware/socketAuth');
 
-const app    = express();
+const app = express();
 const server = http.createServer(app);
 
 // ─── Resolve client/dist path (works both locally and on VPS) ────────────────
@@ -48,8 +48,8 @@ const corsOptions = {
             callback(new Error('Not allowed by CORS'));
         }
     },
-    credentials:    true,
-    methods:        ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-request-id'],
 };
 
@@ -58,13 +58,13 @@ const corsOptions = {
 app.use(helmet({
     contentSecurityPolicy: {
         directives: {
-            defaultSrc:  ["'self'"],
-            scriptSrc:   ["'self'", "'unsafe-inline'"],   // Vite chunks need this
-            styleSrc:    ["'self'", "'unsafe-inline'"],
-            imgSrc:      ["'self'", 'data:', 'blob:', 'https:'],
-            connectSrc:  ["'self'", 'ws:', 'wss:', 'http:', 'https:'], // Socket.IO
-            fontSrc:     ["'self'", 'data:'],
-            workerSrc:   ["'self'", 'blob:'],
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"],   // Vite chunks need this
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+            connectSrc: ["'self'", 'ws:', 'wss:', 'http:', 'https:'], // Socket.IO
+            fontSrc: ["'self'", 'data:'],
+            workerSrc: ["'self'", 'blob:'],
         },
     },
     crossOriginEmbedderPolicy: false,  // allow loading external resources
@@ -79,20 +79,20 @@ app.set('trust proxy', process.env.TRUST_PROXY || 1);
 
 // ─── Rate Limiting ────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
-    windowMs:       15 * 60 * 1000,
-    max:            20,
+    windowMs: 15 * 60 * 1000,
+    max: 20,
     standardHeaders: true,
-    legacyHeaders:  false,
-    message:        { success: false, message: 'Too many login attempts. Please try again in 15 minutes.' },
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many login attempts. Please try again in 15 minutes.' },
 });
 
 const apiLimiter = rateLimit({
-    windowMs:       1 * 60 * 1000,
-    max:            parseInt(process.env.RATE_LIMIT_MAX) || 300,
+    windowMs: 1 * 60 * 1000,
+    max: parseInt(process.env.RATE_LIMIT_MAX) || 300,
     standardHeaders: true,
-    legacyHeaders:  false,
-    message:        { success: false, message: 'Too many requests. Please slow down.' },
-    skip:           (req) => req.path === '/' || req.path === '/health',
+    legacyHeaders: false,
+    message: { success: false, message: 'Too many requests. Please slow down.' },
+    skip: (req) => req.path === '/' || req.path === '/health',
 });
 
 app.use('/api/auth', authLimiter);
@@ -100,10 +100,10 @@ app.use('/api', apiLimiter);
 
 // ─── Socket.IO Server ─────────────────────────────────────────────────────────
 const io = new Server(server, {
-    cors:       corsOptions,
+    cors: corsOptions,
     transports: ['websocket', 'polling'],
     pingInterval: 10000,
-    pingTimeout:  30000,
+    pingTimeout: 30000,
     connectionStateRecovery: {
         maxDisconnectionDuration: 2 * 60 * 1000,
         skipMiddlewares: true,
@@ -116,24 +116,24 @@ io.use(socketAuthMiddleware);
 // ─── API Routes ───────────────────────────────────────────────────────────────
 // Must be registered BEFORE static file serving so /api/* never falls through
 // to index.html
-app.use('/api/auth',          require('./routes/authRoutes'));
-app.use('/api/orders',        require('./routes/orderRoutes'));
-app.use('/api/tables',        require('./routes/tableRoutes'));
-app.use('/api/menu',          require('./routes/menuRoutes'));
-app.use('/api/categories',    require('./routes/categoryRoutes'));
-app.use('/api/settings',      require('./routes/settingRoutes'));
-app.use('/api/dashboard',     require('./routes/dashboardRoutes'));
-app.use('/api/analytics',     require('./routes/analyticsRoutes'));
-app.use('/api/payments',      require('./routes/paymentRoutes'));
+app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/orders', require('./routes/orderRoutes'));
+app.use('/api/tables', require('./routes/tableRoutes'));
+app.use('/api/menu', require('./routes/menuRoutes'));
+app.use('/api/categories', require('./routes/categoryRoutes'));
+app.use('/api/settings', require('./routes/settingRoutes'));
+app.use('/api/dashboard', require('./routes/dashboardRoutes'));
+app.use('/api/analytics', require('./routes/analyticsRoutes'));
+app.use('/api/payments', require('./routes/paymentRoutes'));
 app.use('/api/notifications', require('./routes/notificationRoutes'));
-app.use('/api/webhooks',      require('./routes/webhookRoutes'));
+app.use('/api/webhooks', require('./routes/webhookRoutes'));
 
 // ─── Socket.IO Events ────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
     logger.info('Socket connected', {
         socketId: socket.id,
-        userId:   socket.userId,
-        role:     socket.role,
+        userId: socket.userId,
+        role: socket.role,
     });
 
     socket.on('join-branch', () => {
@@ -168,13 +168,13 @@ autoReleaseExpiredReservations(io);
 
 // ─── Health Check (JSON — always available, even without frontend build) ──────
 app.get('/health', async (req, res) => {
-    const uptime   = process.uptime();
+    const uptime = process.uptime();
     const memUsage = process.memoryUsage();
 
     // Check MySQL connectivity
     let dbStatus = 'disconnected';
-    let dbHost   = process.env.DB_HOST || 'N/A';
-    let dbName   = process.env.DB_NAME || 'N/A';
+    let dbHost = process.env.DB_HOST || 'N/A';
+    let dbName = process.env.DB_NAME || 'N/A';
     try {
         const conn = await pool.getConnection();
         await conn.ping();
@@ -185,34 +185,34 @@ app.get('/health', async (req, res) => {
     }
 
     res.json({
-        status:      dbStatus === 'connected' ? 'healthy' : 'degraded',
-        timestamp:   new Date().toISOString(),
-        uptime:      `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
-        version:     require('./package.json').version || '1.0.0',
+        status: dbStatus === 'connected' ? 'healthy' : 'degraded',
+        timestamp: new Date().toISOString(),
+        uptime: `${Math.floor(uptime / 3600)}h ${Math.floor((uptime % 3600) / 60)}m ${Math.floor(uptime % 60)}s`,
+        version: require('./package.json').version || '1.0.0',
         environment: process.env.NODE_ENV || 'development',
-        node:        process.version,
-        frontend:    hasFrontend ? 'built' : 'not built (run: npm run build in client/)',
+        node: process.version,
+        frontend: hasFrontend ? 'built' : 'not built (run: npm run build in client/)',
 
         database: {
             state: dbStatus,
-            host:  dbHost,
-            name:  dbName,
+            host: dbHost,
+            name: dbName,
         },
 
         sockets: {
             connected: io.engine.clientsCount,
-            rooms:     io.sockets.adapter.rooms.size,
+            rooms: io.sockets.adapter.rooms.size,
         },
 
         memory: {
-            rss:       `${(memUsage.rss       / 1024 / 1024).toFixed(1)} MB`,
-            heapUsed:  `${(memUsage.heapUsed  / 1024 / 1024).toFixed(1)} MB`,
+            rss: `${(memUsage.rss / 1024 / 1024).toFixed(1)} MB`,
+            heapUsed: `${(memUsage.heapUsed / 1024 / 1024).toFixed(1)} MB`,
             heapTotal: `${(memUsage.heapTotal / 1024 / 1024).toFixed(1)} MB`,
-            external:  `${(memUsage.external  / 1024 / 1024).toFixed(1)} MB`,
+            external: `${(memUsage.external / 1024 / 1024).toFixed(1)} MB`,
         },
 
         cache: getCacheStats(),
-        pid:   process.pid,
+        pid: process.pid,
     });
 });
 
@@ -223,7 +223,7 @@ if (hasFrontend) {
     // Serve static assets (JS, CSS, images) with 1-day cache
     app.use(express.static(CLIENT_DIST, {
         maxAge: '1d',
-        etag:   true,
+        etag: true,
         // Don't cache index.html so new deployments take effect immediately
         setHeaders: (res, filePath) => {
             if (filePath.endsWith('index.html')) {
@@ -241,29 +241,29 @@ if (hasFrontend) {
 } else {
     // No frontend build yet — return a helpful JSON message at root
     app.get('/', (req, res) => res.json({
-        status:  'ok',
+        status: 'ok',
         message: 'KOT API is running. Frontend not built yet.',
-        hint:    'Run: cd client && npm install && npm run build',
-        health:  '/health',
-        api:     '/api',
+        hint: 'Run: cd client && npm install && npm run build',
+        health: '/health',
+        api: '/api',
     }));
 }
 
 // ─── Global Error Handler ─────────────────────────────────────────────────────
 app.use((err, req, res, next) => {
     logger.error('Unhandled route error', {
-        error:     err.message,
-        stack:     err.stack,
-        method:    req.method,
-        url:       req.originalUrl,
+        error: err.message,
+        stack: err.stack,
+        method: req.method,
+        url: req.originalUrl,
         requestId: req.requestId,
     });
     const statusCode = err.statusCode || 500;
     res.status(statusCode).json({
-        success:   false,
-        message:   err.message || 'Internal Server Error',
+        success: false,
+        message: err.message || 'Internal Server Error',
         requestId: req.requestId,
-        stack:     process.env.NODE_ENV === 'production' ? null : err.stack,
+        stack: process.env.NODE_ENV === 'production' ? null : err.stack,
     });
 });
 
@@ -297,7 +297,7 @@ const shutdown = async (signal) => {
 process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled Promise Rejection', {
         reason: reason?.message || reason,
-        stack:  reason?.stack,
+        stack: reason?.stack,
     });
 });
 
@@ -307,7 +307,7 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT',  () => shutdown('SIGINT'));
+process.on('SIGINT', () => shutdown('SIGINT'));
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 const startServer = async () => {
@@ -317,10 +317,10 @@ const startServer = async () => {
         const PORT = parseInt(process.env.PORT) || 5005;
         server.listen(PORT, '0.0.0.0', () => {
             logger.info('Server started', {
-                port:     PORT,
-                env:      process.env.NODE_ENV || 'development',
-                pid:      process.pid,
-                origins:  allowedOrigins,
+                port: PORT,
+                env: process.env.NODE_ENV || 'development',
+                pid: process.pid,
+                origins: allowedOrigins,
                 frontend: hasFrontend ? CLIENT_DIST : 'not built',
             });
             logger.info('Socket.IO ready for multi-device connections');
