@@ -6,9 +6,11 @@ export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
     // ── Synchronous session restore ───────────────────────────────────────────
+    // Uses sessionStorage so each browser tab is fully independent —
+    // Tab 1 can be waiter, Tab 2 kitchen, Tab 3 admin simultaneously.
     const [user, setUser] = useState(() => {
         try {
-            const raw = localStorage.getItem('user');
+            const raw = sessionStorage.getItem('user');
             return raw ? JSON.parse(raw) : null;
         } catch {
             return null;
@@ -109,6 +111,17 @@ export const AuthProvider = ({ children }) => {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // ── Live settings sync via socket ─────────────────────────────────────
+    useEffect(() => {
+        if (!socket) return;
+        const onSettingsUpdated = (updatedSettings) => {
+            setSettings(updatedSettings);
+        };
+        socket.on('settings-updated', onSettingsUpdated);
+        return () => socket.off('settings-updated', onSettingsUpdated);
+    }, [socket]);
+
+
     // ── Login ─────────────────────────────────────────────────────────────────
     const login = async (username, password) => {
         setLoading(true);
@@ -117,7 +130,7 @@ export const AuthProvider = ({ children }) => {
             const userData = res.data;
 
             setUser(userData);
-            localStorage.setItem('user', JSON.stringify(userData));
+            sessionStorage.setItem('user', JSON.stringify(userData));
 
             initSocket(userData.role);
             fetchSettings();
@@ -134,7 +147,7 @@ export const AuthProvider = ({ children }) => {
     // ── Logout ────────────────────────────────────────────────────────────────
     const logout = () => {
         setUser(null);
-        localStorage.removeItem('user');
+        sessionStorage.removeItem('user');
         if (socket) socket.disconnect();
         setSocket(null);
         setSocketConnected(false);

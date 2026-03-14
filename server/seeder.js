@@ -7,8 +7,8 @@
  *   4. Sample completed orders with order_items
  */
 
-const dotenv  = require('dotenv');
-const bcrypt  = require('bcryptjs');
+const dotenv = require('dotenv');
+const bcrypt = require('bcryptjs');
 dotenv.config();
 
 const { pool, connectDB } = require('./config/db');
@@ -41,13 +41,13 @@ const importData = async () => {
         await conn.query(
             'INSERT INTO users (username, password, role) VALUES ?',
             [[
-                ['admin',   await hash('admin123'),   'admin'],
-                ['waiter',  await hash('waiter123'),  'waiter'],
+                ['admin', await hash('admin123'), 'admin'],
+                ['waiter', await hash('waiter123'), 'waiter'],
                 ['kitchen', await hash('kitchen123'), 'kitchen'],
                 ['cashier', await hash('cashier123'), 'cashier'],
             ]]
         );
-        const [[adminUser]]  = await conn.query('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin']);
+        const [[adminUser]] = await conn.query('SELECT id FROM users WHERE role = ? LIMIT 1', ['admin']);
         const [[waiterUser]] = await conn.query('SELECT id FROM users WHERE role = ? LIMIT 1', ['waiter']);
 
         // ── Settings ─────────────────────────────────────────────────────────
@@ -68,9 +68,9 @@ const importData = async () => {
         await conn.query(
             'INSERT INTO categories (name, description) VALUES ?',
             [[
-                ['Starters',    'Appetizers'],
+                ['Starters', 'Appetizers'],
                 ['Main Course', 'Heavy meals'],
-                ['Beverages',   'Drinks'],
+                ['Beverages', 'Drinks'],
             ]]
         );
         const [cats] = await conn.query('SELECT id FROM categories ORDER BY id LIMIT 3');
@@ -80,11 +80,11 @@ const importData = async () => {
         await conn.query(
             'INSERT INTO menu_items (name, price, category_id, is_veg) VALUES ?',
             [[
-                ['Paneer Tikka',  250, cat0, 1],
+                ['Paneer Tikka', 250, cat0, 1],
                 ['Chicken Wings', 300, cat0, 0],
-                ['Butter Chicken',400, cat1, 0],
-                ['Dal Makhani',   200, cat1, 1],
-                ['Coke',           50, cat2, 1],
+                ['Butter Chicken', 400, cat1, 0],
+                ['Dal Makhani', 200, cat1, 1],
+                ['Coke', 50, cat2, 1],
             ]]
         );
         const [menuItems] = await conn.query('SELECT id, name, price FROM menu_items ORDER BY id');
@@ -104,15 +104,16 @@ const importData = async () => {
             date.setHours(date.getHours() - (i % 24));
             if (i > 10) date.setDate(date.getDate() - 1);
 
-            const item1   = menuItems[i % menuItems.length];
-            const item2   = menuItems[(i + 1) % menuItems.length];
-            const total   = item1.price + item2.price;
+            const item1 = menuItems[i % menuItems.length];
+            const item2 = menuItems[(i + 1) % menuItems.length];
+            const total = Number(item1.price) + Number(item2.price);
             const tableId = allTables[i % allTables.length].id;
             const payMethod = i % 2 === 0 ? 'cash' : 'upi';
 
             const prepStart = new Date(date); prepStart.setMinutes(date.getMinutes() - 20);
-            const readyAt   = new Date(date); readyAt.setMinutes(date.getMinutes() - 5);
+            const readyAt = new Date(date); readyAt.setMinutes(date.getMinutes() - 5);
 
+            console.log(`Inserting sample order ORD-${100 + i}...`);
             const [ordRes] = await conn.query(
                 `INSERT INTO orders
                  (order_number, token_number, order_type, table_id, order_status,
@@ -121,16 +122,26 @@ const importData = async () => {
                   payment_at, completed_at, created_at, kot_status)
                  VALUES (?, ?, 'dine-in', ?, 'completed', 'paid', ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?, 'Closed')`,
                 [`ORD-${100 + i}`, 100 + i, tableId, payMethod, total, total,
-                 waiterUser.id, prepStart, readyAt, date, date, date]
+                waiterUser.id, prepStart, readyAt, date, date, date]
             );
+
+            const orderId = ordRes.insertId;
+            console.log(`Order inserted. Order ID generated: ${orderId}`);
 
             await conn.query(
                 'INSERT INTO order_items (order_id, menu_item_id, name, price, quantity, status) VALUES ?',
                 [[
-                    [ordRes.insertId, item1.id, item1.name, item1.price, 1, 'SERVED'],
-                    [ordRes.insertId, item2.id, item2.name, item2.price, 1, 'SERVED'],
+                    [orderId, item1.id, item1.name, item1.price, 1, 'SERVED'],
+                    [orderId, item2.id, item2.name, item2.price, 1, 'SERVED'],
                 ]]
             );
+            console.log(`Items inserted for order ID: ${orderId}`);
+
+            await conn.query(
+                `INSERT INTO payments (order_id, payment_method, amount, amount_received, change_amount) VALUES (?, ?, ?, ?, ?)`,
+                [orderId, payMethod, total, total, 0]
+            );
+            console.log(`Payment inserted for order ID: ${orderId}`);
         }
 
         conn.release();

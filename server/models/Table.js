@@ -19,7 +19,7 @@ const fmt = (row) => {
 const Table = {
     async findAll() {
         const [rows] = await pool.query(
-            'SELECT * FROM `tables` ORDER BY number'
+            'SELECT * FROM `tables` WHERE id IS NOT NULL AND number IS NOT NULL ORDER BY number'
         );
         return rows.map(fmt);
     },

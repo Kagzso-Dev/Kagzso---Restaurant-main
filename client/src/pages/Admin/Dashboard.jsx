@@ -1,10 +1,12 @@
-import { useState, useEffect, useContext, useMemo, useCallback } from 'react';
+import { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
 import { AuthContext } from '../../context/AuthContext';
 import api from '../../api';
 import {
     TrendingUp, TrendingDown, ShoppingBag, Clock, DollarSign,
     Download, RefreshCw, ChevronDown
 } from 'lucide-react';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 
 /* ── Skeleton Card ───────────────────────────────────────────────────────── */
 const SkeletonCard = () => (
@@ -81,33 +83,78 @@ const AdminDashboard = () => {
     // Growth state
     const [growth, setGrowth] = useState(null);
     const [growthLoading, setGrowthLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    // DB-computed stats (from MySQL via /api/dashboard/stats + /api/analytics/summary)
+    const [dbStats, setDbStats] = useState(null);
+    const [dbSummary, setDbSummary] = useState(null);
+    const [statsLoading, setStatsLoading] = useState(true);
+
+    const dashboardRef = useRef(null);
 
     const PER_PAGE = 10;
     const { user, socket, formatPrice, settings } = useContext(AuthContext);
 
-    /* ── Fetch Orders ─────────────────────────────────────────────────── */
-    const fetchOrders = useCallback(async () => {
+    /* ── Fetch Orders (for the browsable table only) ──────────────────── */
+    const fetchOrders = useCallback(async (forceRefresh = false) => {
         try {
             setLoading(true);
-            const res = await api.get('/api/orders', {
+            if (forceRefresh) setRefreshing(true);
+            const refreshQuery = forceRefresh ? "?refresh=true" : "";
+            const res = await api.get(`/api/orders${refreshQuery}`, {
                 headers: { Authorization: `Bearer ${user.token}` }
             });
             // res.data is { orders, pagination }
             setOrders(res.data.orders || []);
+            console.log('[Dashboard] Orders fetched from DB:', res.data.orders?.length ?? 0);
         } catch (err) {
             console.error('Error fetching orders', err);
         } finally {
             setLoading(false);
+            setRefreshing(false);
+        }
+    }, [user]);
+
+    /* ── Fetch DB Stats — MySQL COUNT/SUM queries via API ─────────────── */
+    const fetchStats = useCallback(async (forceRefresh = false) => {
+        if (user?.role !== 'admin') return;
+        const refreshQuery = forceRefresh ? '?refresh=true' : '';
+        try {
+            setStatsLoading(true);
+            const [statsRes, summaryRes] = await Promise.allSettled([
+                // GET /api/dashboard/stats → MySQL: COUNT(*) GROUP BY order_status
+                api.get(`/api/dashboard/stats${refreshQuery}`, {
+                    headers: { Authorization: `Bearer ${user.token}` }
+                }),
+                // GET /api/analytics/summary → MySQL: SUM(final_amount), AVG(final_amount)
+                api.get(`/api/analytics/summary?range=month${refreshQuery}`, {
+                    headers: { Authorization: `Bearer ${user.token}` }
+                }),
+            ]);
+            if (statsRes.status === 'fulfilled') {
+                console.log('[Dashboard] DB stats from MySQL:', statsRes.value.data);
+                setDbStats(statsRes.value.data);
+            } else {
+                console.error('[Dashboard] stats fetch failed:', statsRes.reason?.message);
+            }
+            if (summaryRes.status === 'fulfilled') {
+                console.log('[Dashboard] DB summary from MySQL:', summaryRes.value.data);
+                setDbSummary(summaryRes.value.data);
+            } else {
+                console.error('[Dashboard] summary fetch failed:', summaryRes.reason?.message);
+            }
+        } finally {
+            setStatsLoading(false);
         }
     }, [user]);
 
     /* ── Fetch Growth ─────────────────────────────────────────────────── */
-    const fetchGrowth = useCallback(async () => {
+    const fetchGrowth = useCallback(async (forceRefresh = false) => {
         // Only fetch for admin role
         if (user?.role !== 'admin') return;
         setGrowthLoading(true);
+        const refreshQuery = forceRefresh ? "?refresh=true" : "";
         try {
-            const res = await api.get('/api/dashboard/growth', {
+            const res = await api.get(`/api/dashboard/growth${refreshQuery}`, {
                 headers: { Authorization: `Bearer ${user.token}` },
             });
             setGrowth(res.data.growth ?? 0);
@@ -121,33 +168,43 @@ const AdminDashboard = () => {
 
     useEffect(() => {
         fetchOrders();
+        fetchStats();
         fetchGrowth();
 
         if (socket) {
-            const onNew = (o) => setOrders(p => [o, ...p]);
-            const onUpdate = (o) => setOrders(p => p.map(x => x._id === o._id ? o : x));
+            const onNew = (o) => {
+                setOrders(p => [o, ...p]);
+                // Re-fetch MySQL stats whenever a new order comes in
+                fetchStats(true);
+            };
+            const onUpdate = (o) => {
+                setOrders(p => p.map(x => x._id === o._id ? o : x));
+                fetchStats(true);
+            };
             socket.on('new-order', onNew);
             socket.on('order-updated', onUpdate);
             socket.on('order-completed', onUpdate);
             socket.on('orderCancelled', onUpdate);
+            socket.on('payment-success', () => fetchStats(true));
             return () => {
                 socket.off('new-order', onNew);
                 socket.off('order-updated', onUpdate);
                 socket.off('order-completed', onUpdate);
                 socket.off('orderCancelled', onUpdate);
+                socket.off('payment-success', () => fetchStats(true));
             };
         }
-    }, [user, socket, fetchOrders, fetchGrowth]);
+    }, [user, socket, fetchOrders, fetchStats, fetchGrowth]);
 
-    /* ── Derived Stats ───────────────────────────────────────────────── */
-    const stats = useMemo(() => {
-        const completed = orders.filter(o => o.orderStatus === 'completed');
-        const active = orders.filter(o => !['completed', 'cancelled'].includes(o.orderStatus));
-        const pending = orders.filter(o => o.orderStatus === 'pending');
-        const revenue = completed.reduce((s, o) => s + (o.finalAmount || 0), 0);
-        const avg = completed.length ? revenue / completed.length : 0;
-        return { completed, active, pending, revenue, avg, total: orders.length };
-    }, [orders]);
+    /* ── DB-backed stat values (from MySQL via API) ───────────────────── */
+    // dbStats.today.active/completed/cancelled/revenue from /api/dashboard/stats
+    // dbSummary.totalRevenue/orderCount/avgOrderValue from /api/analytics/summary
+    const activeCount   = dbStats?.today?.active    ?? 0;
+    const completedCount = dbStats?.today?.completed ?? 0;
+    const allTimeCount  = dbStats?.allTime           ?? 0;
+    const totalRevenue  = dbSummary?.totalRevenue    ?? 0;
+    const avgOrderValue = dbSummary?.avgOrderValue   ?? 0;
+    const orderCount    = dbSummary?.orderCount      ?? 0;
 
     /* ── Pagination ──────────────────────────────────────────────────── */
     const paginated = useMemo(() => {
@@ -156,32 +213,43 @@ const AdminDashboard = () => {
     }, [orders, page]);
     const totalPages = Math.ceil(orders.length / PER_PAGE);
 
-    /* ── CSV Download ────────────────────────────────────────────────── */
-    const downloadReport = () => {
-        if (!orders.length) { alert('No data to download'); return; }
-        const headers = ['Order Number,Date,Time,Type,Items,Status,Payment,Total'];
-        const rows = orders.map(o => {
-            const d = new Date(o.createdAt);
-            return `${o.orderNumber},${d.toLocaleDateString()},${d.toLocaleTimeString()},${o.orderType},${o.items.length},${o.orderStatus},${o.paymentStatus},${o.finalAmount}`;
+    /* ── PDF Export ──────────────────────────────────────────────────── */
+    const exportPDF = async () => {
+        const element = dashboardRef.current;
+        if (!element) return;
+
+        const canvas = await html2canvas(element, {
+            scale: 2,
+            backgroundColor: '#0f172a',
+            logging: false,
+            useCORS: true
         });
-        const csv = [headers, ...rows].join('\n');
-        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `sales_report_${new Date().toISOString().split('T')[0]}.csv`;
-        a.click();
-        URL.revokeObjectURL(url);
+
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const imgProps = pdf.getImageProperties(imgData);
+        const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+        pdf.setFontSize(18);
+        pdf.setTextColor(249, 115, 22);
+        pdf.text(`Kagzso Business Dashboard`, 10, 15);
+        pdf.setFontSize(10);
+        pdf.setTextColor(150);
+        pdf.text(`Generated: ${new Date().toLocaleString()}`, 10, 22);
+        pdf.addImage(imgData, 'PNG', 0, 30, pdfWidth, pdfHeight);
+        pdf.save(`Kagzso_Dashboard_${new Date().toISOString().split('T')[0]}.pdf`);
     };
 
-    /* ── Handle Refresh (both orders + growth) ───────────────────────── */
+    /* ── Handle Refresh (orders + DB stats + growth) ─────────────────── */
     const handleRefresh = () => {
-        fetchOrders();
-        fetchGrowth();
+        fetchOrders(true);
+        fetchStats(true);
+        fetchGrowth(true);
     };
 
     return (
-        <div className="space-y-5 animate-fade-in">
+        <div className="space-y-5 animate-fade-in" ref={dashboardRef}>
 
             {/* ── Page Header ─────────────────────────────────────────── */}
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 bg-[var(--theme-bg-card2)] rounded-2xl p-5 border border-[var(--theme-border)]">
@@ -196,32 +264,33 @@ const AdminDashboard = () => {
                     <button
                         onClick={handleRefresh}
                         className="flex items-center gap-2 px-4 py-2.5 bg-[var(--theme-bg-hover)] hover:bg-[var(--theme-border)] text-[var(--theme-text-muted)] hover:text-[var(--theme-text-main)] border border-[var(--theme-border)] rounded-xl text-sm font-medium transition-colors min-h-[44px]"
+                        disabled={refreshing}
                     >
-                        <RefreshCw size={15} />
+                        <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
                         <span className="hidden sm:inline">Refresh</span>
                     </button>
                     <button
-                        onClick={downloadReport}
-                        className="flex items-center gap-2 px-4 py-2.5 bg-orange-600 hover:bg-orange-500 text-white rounded-xl text-sm font-semibold transition-colors shadow-glow-orange min-h-[44px]"
+                        onClick={exportPDF}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-600 to-orange-500 hover:from-orange-500 hover:to-orange-400 text-white rounded-xl text-sm font-semibold transition-colors shadow-glow-orange min-h-[44px]"
                     >
                         <Download size={15} />
-                        <span>Report</span>
+                        <span>Export PDF</span>
                     </button>
                 </div>
             </div>
 
-            {/* ── Stats Grid ──────────────────────────────────────────── */}
+            {/* ── Stats Grid — values sourced from MySQL via API ─────── */}
             {/* Mobile: 1-col → sm: 2-col → lg: 4-col */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {loading ? (
+                {statsLoading ? (
                     Array(4).fill(0).map((_, i) => <SkeletonCard key={i} />)
                 ) : (
                     <>
-                        {/* Total Revenue — real growth badge from API */}
+                        {/* Total Revenue — MySQL: SUM(final_amount) WHERE payment_status='paid' */}
                         <StatCard
-                            title="Total Revenue"
-                            value={formatPrice(stats.revenue)}
-                            subtitle={`${stats.completed.length} completed orders`}
+                            title="Total Revenue (30d)"
+                            value={formatPrice(totalRevenue)}
+                            subtitle={`${orderCount} paid order${orderCount !== 1 ? 's' : ''} this month`}
                             icon={DollarSign}
                             color="orange"
                             badge={
@@ -233,9 +302,10 @@ const AdminDashboard = () => {
                                 </div>
                             }
                         />
+                        {/* Active — MySQL: COUNT(*) WHERE order_status IN ('pending','accepted','preparing','ready') */}
                         <StatCard
                             title="Active Orders"
-                            value={stats.active.length}
+                            value={activeCount}
                             subtitle="Currently in progress"
                             icon={ShoppingBag}
                             color="blue"
@@ -245,18 +315,20 @@ const AdminDashboard = () => {
                                 </span>
                             }
                         />
+                        {/* Completed — MySQL: COUNT(*) WHERE order_status='completed' (today) */}
                         <StatCard
-                            title="Pending KOTs"
-                            value={stats.pending.length}
-                            subtitle="Awaiting kitchen"
+                            title="Completed Today"
+                            value={completedCount}
+                            subtitle={`${allTimeCount} total all-time`}
                             icon={Clock}
                             color="amber"
                             badge={null}
                         />
+                        {/* Avg — MySQL: AVG(final_amount) WHERE payment_status='paid' */}
                         <StatCard
                             title="Avg Order Value"
-                            value={formatPrice(stats.avg)}
-                            subtitle={`${stats.total} total orders`}
+                            value={formatPrice(avgOrderValue)}
+                            subtitle="30-day average"
                             icon={TrendingUp}
                             color="emerald"
                             badge={null}

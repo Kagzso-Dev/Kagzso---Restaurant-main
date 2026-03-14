@@ -1,1 +1,25 @@
 /.claude
+
+# Environment files — NEVER commit real credentials
+server/.env
+client/.env
+.env
+.env.local
+.env.production
+
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Build output
+client/dist/
+client/build/
+
+# Logs
+*.log
+server/seeder_error.log
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/

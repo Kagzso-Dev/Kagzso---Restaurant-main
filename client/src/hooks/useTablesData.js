@@ -37,15 +37,30 @@ export const useTablesData = () => {
         fetchTables();
 
         if (socket) {
-            // Live update: mutate only the changed table, no full refetch needed
             const handler = (data) => {
-                setTables((prev) =>
-                    prev.map((t) =>
-                        t._id === data.tableId
-                            ? { ...t, status: data.status, lockedBy: data.lockedBy ?? null }
-                            : t
-                    )
-                );
+                // New table added by admin
+                if (data.action === 'create' && data.table) {
+                    setTables((prev) => {
+                        if (prev.find(t => t._id === data.table._id)) return prev;
+                        return [...prev, data.table].sort((a, b) => parseInt(a.number) - parseInt(b.number));
+                    });
+                    return;
+                }
+                // Table deleted by admin
+                if (data.action === 'delete' && data.id) {
+                    setTables((prev) => prev.filter(t => t._id !== data.id));
+                    return;
+                }
+                // Status update (occupied, reserved, cleaning, available)
+                if (data.tableId) {
+                    setTables((prev) =>
+                        prev.map((t) =>
+                            t._id === data.tableId
+                                ? { ...t, status: data.status, lockedBy: data.lockedBy ?? null }
+                                : t
+                        )
+                    );
+                }
             };
             socket.on('table-updated', handler);
             return () => socket.off('table-updated', handler);

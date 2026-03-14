@@ -1,7 +1,10 @@
-const Order  = require('../models/Order');
-const Table  = require('../models/Table');
+const Order = require('../models/Order');
+const Table = require('../models/Table');
+const Payment = require('../models/Payment');
+const PaymentAudit = require('../models/PaymentAudit');
 const { createAndEmitNotification } = require('./notificationController');
-const { invalidateCache }           = require('../utils/cache');
+const { invalidateCache } = require('../utils/cache');
+const { refreshDailyAnalytics } = require('../utils/dailyAnalytics');
 
 // Helper: extract raw table ID from either the populated object or plain value
 const rawTableId = (tableId) =>
@@ -32,27 +35,33 @@ const getOrders = async (req, res) => {
             Order.count(filter),
         ]);
 
+        console.log(`[getOrders] MySQL returned ${orders.length} orders (total: ${total}) for role=${req.role}, filter=${JSON.stringify(filter)}`);
+
         res.json({
             orders,
             pagination: {
                 total,
-                page:  parseInt(page),
+                page: parseInt(page),
                 pages: Math.ceil(total / limit),
                 limit: parseInt(limit),
             },
         });
     } catch (error) {
+        console.error('[getOrders] MySQL query error:', error.message);
         res.status(500).json({ message: error.message });
     }
 };
+
 
 // @desc    Create new order
 // @route   POST /api/orders
 // @access  Private (Waiter, Cashier, Admin)
 const createOrder = async (req, res) => {
     const { orderType, tableId, customerInfo, items, totalAmount, tax, discount, finalAmount } = req.body;
+    console.log('[DEBUG] Received order payload on API /api/orders:', JSON.stringify(req.body, null, 2));
 
     if (!items || items.length === 0) {
+        console.warn('[DEBUG] Rejecting order: No items provided.');
         return res.status(400).json({ message: 'No order items' });
     }
 
@@ -79,14 +88,14 @@ const createOrder = async (req, res) => {
         // Transition table → occupied
         if (orderType === 'dine-in' && tableId) {
             await Table.updateById(tableId, {
-                status:         'occupied',
+                status: 'occupied',
                 currentOrderId: createdOrder._id,
-                reservedAt:     null,
+                reservedAt: null,
             });
             const table = await Table.findById(tableId);
             req.app.get('socketio').to('restaurant_main').emit('table-updated', {
-                tableId:  table._id,
-                status:   'occupied',
+                tableId: table._id,
+                status: 'occupied',
                 lockedBy: table.lockedBy,
             });
         }
@@ -94,17 +103,19 @@ const createOrder = async (req, res) => {
         req.app.get('socketio').to('restaurant_main').emit('new-order', createdOrder);
 
         createAndEmitNotification(req.app.get('socketio'), {
-            title:         `New Order #${createdOrder.orderNumber}`,
-            message:       `${createdOrder.items.length} item(s) — ${createdOrder.orderType === 'dine-in' ? 'Dine-In' : 'Takeaway'}`,
-            type:          'NEW_ORDER',
-            roleTarget:    'kitchen',
-            referenceId:   createdOrder._id,
+            title: `New Order #${createdOrder.orderNumber}`,
+            message: `${createdOrder.items.length} item(s) — ${createdOrder.orderType === 'dine-in' ? 'Dine-In' : 'Takeaway'}`,
+            type: 'NEW_ORDER',
+            roleTarget: 'kitchen',
+            referenceId: createdOrder._id,
             referenceType: 'order',
-            createdBy:     req.userId,
+            createdBy: req.userId,
         });
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
+        // Refresh daily_analytics from real order data (fire-and-forget)
+        refreshDailyAnalytics().catch(e => console.error('[createOrder] dailyAnalytics refresh failed:', e.message));
         res.status(201).json(createdOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -134,8 +145,8 @@ const updateOrderStatus = async (req, res) => {
         const updates = { orderStatus: status };
         if (status === 'completed' && order.paymentStatus === 'paid') updates.kotStatus = 'Closed';
         if (status === 'preparing' && !order.prepStartedAt) updates.prepStartedAt = new Date();
-        if (status === 'ready'     && !order.readyAt)       updates.readyAt       = new Date();
-        if (status === 'completed' && !order.completedAt)   updates.completedAt   = new Date();
+        if (status === 'ready' && !order.readyAt) updates.readyAt = new Date();
+        if (status === 'completed' && !order.completedAt) updates.completedAt = new Date();
 
         const updatedOrder = await Order.updateById(req.params.id, updates);
 
@@ -155,18 +166,20 @@ const updateOrderStatus = async (req, res) => {
 
         if (status === 'ready') {
             createAndEmitNotification(req.app.get('socketio'), {
-                title:         `Order #${order.orderNumber} Ready`,
-                message:       'Order is ready for pickup/serving',
-                type:          'ORDER_READY',
-                roleTarget:    'waiter',
-                referenceId:   order._id,
+                title: `Order #${order.orderNumber} Ready`,
+                message: 'Order is ready for pickup/serving',
+                type: 'ORDER_READY',
+                roleTarget: 'waiter',
+                referenceId: order._id,
                 referenceType: 'order',
-                createdBy:     req.userId,
+                createdBy: req.userId,
             });
         }
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
+        // Refresh daily_analytics from real order data (fire-and-forget)
+        refreshDailyAnalytics().catch(e => console.error('[updateOrderStatus] dailyAnalytics refresh failed:', e.message));
         res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -177,8 +190,8 @@ const updateOrderStatus = async (req, res) => {
 // @route   PUT /api/orders/:id/items/:itemId/status
 // @access  Private (Kitchen, Admin)
 const updateItemStatus = async (req, res) => {
-    const { status }        = req.body;
-    const { id, itemId }    = req.params;
+    const { status } = req.body;
+    const { id, itemId } = req.params;
     try {
         const order = await Order.findById(id);
         if (!order) {
@@ -194,8 +207,8 @@ const updateItemStatus = async (req, res) => {
         }
 
         const updatedOrder = await Order.updateItemStatus(id, itemId, status);
-        req.app.get('socketio').to('restaurant_main').emit('itemUpdated',    updatedOrder);
-        req.app.get('socketio').to('restaurant_main').emit('order-updated',  updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('itemUpdated', updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
@@ -205,7 +218,7 @@ const updateItemStatus = async (req, res) => {
     }
 };
 
-// @desc    Quick payment (inline, without full payment controller flow)
+// @desc    Quick payment (inline cashier shortcut)
 // @route   PUT /api/orders/:id/payment
 // @access  Private (Cashier, Admin)
 const processPayment = async (req, res) => {
@@ -224,14 +237,35 @@ const processPayment = async (req, res) => {
             });
         }
 
+        const method = paymentMethod || 'cash';
+        const received = (amountPaid != null && !isNaN(Number(amountPaid))) ? Number(amountPaid) : order.finalAmount;
+        const change = method === 'cash'
+            ? Math.round((received - order.finalAmount) * 100) / 100
+            : 0;
+
+        // Check if a payments record already exists (idempotent)
+        const existingPayment = await Payment.findByOrderId(req.params.id);
+        let payment = existingPayment;
+        if (!existingPayment) {
+            payment = await Payment.create({
+                orderId: order._id,
+                paymentMethod: method,
+                transactionId: req.body.transactionId || null,
+                amount: order.finalAmount,
+                amountReceived: received,
+                change,
+                cashierId: req.userId,
+            });
+        }
+
         const updatedOrder = await Order.updateById(req.params.id, {
             paymentStatus: 'paid',
-            paymentMethod: paymentMethod || 'cash',
-            orderStatus:   'completed',
-            kotStatus:     'Closed',
-            paymentAt:     new Date(),
-            paidAt:        new Date(),
-            completedAt:   order.completedAt || new Date(),
+            paymentMethod: method,
+            orderStatus: 'completed',
+            kotStatus: 'Closed',
+            paymentAt: new Date(),
+            paidAt: new Date(),
+            completedAt: order.completedAt || new Date(),
         });
 
         if (order.orderType === 'dine-in' && order.tableId) {
@@ -242,13 +276,30 @@ const processPayment = async (req, res) => {
             });
         }
 
-        req.app.get('socketio').to('restaurant_main').emit('order-updated',   updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
         req.app.get('socketio').to('restaurant_main').emit('order-completed', updatedOrder);
 
-        res.json({ success: true, message: 'Payment successful & token closed', order: updatedOrder });
+        // Audit trail
+        PaymentAudit.create({
+            orderId: order._id,
+            paymentId: payment?._id,
+            action: 'PAYMENT_PROCESSED',
+            status: 'success',
+            amount: order.finalAmount,
+            paymentMethod: method,
+            performedBy: req.userId,
+            performedByRole: req.role,
+            ipAddress: req.ip,
+            userAgent: req.get('user-agent'),
+            metadata: { change, orderNumber: order.orderNumber, via: 'quick-payment' },
+        }).catch(e => console.error('[orderController] audit log failed:', e.message));
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
+        // Refresh daily_analytics from real order data (fire-and-forget)
+        refreshDailyAnalytics().catch(e => console.error('[processPayment] dailyAnalytics refresh failed:', e.message));
+
+        res.json({ success: true, message: 'Payment successful & token closed', order: updatedOrder });
     } catch (error) {
         res.status(500).json({ message: error.message });
     }
@@ -286,9 +337,9 @@ const cancelOrder = async (req, res) => {
         }
 
         const updatedOrder = await Order.updateById(req.params.id, {
-            orderStatus:  'cancelled',
-            kotStatus:    'Closed',
-            cancelledBy:  req.role.toUpperCase(),
+            orderStatus: 'cancelled',
+            kotStatus: 'Closed',
+            cancelledBy: req.role.toUpperCase(),
             cancelReason: reason || 'No reason provided',
         });
 
@@ -301,10 +352,12 @@ const cancelOrder = async (req, res) => {
         }
 
         req.app.get('socketio').to('restaurant_main').emit('orderCancelled', updatedOrder);
-        req.app.get('socketio').to('restaurant_main').emit('order-updated',  updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
 
         invalidateCache('dashboard');
         invalidateCache('analytics');
+        // Refresh daily_analytics from real order data (fire-and-forget)
+        refreshDailyAnalytics().catch(e => console.error('[cancelOrder] dailyAnalytics refresh failed:', e.message));
         res.json(updatedOrder);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -316,7 +369,7 @@ const cancelOrder = async (req, res) => {
 // @access  Private (Waiter, Kitchen)
 const cancelOrderItem = async (req, res) => {
     const { id: orderId, itemId } = req.params;
-    const { reason }              = req.body;
+    const { reason } = req.body;
 
     try {
         const order = await Order.findById(orderId);
@@ -341,13 +394,13 @@ const cancelOrderItem = async (req, res) => {
 
         // Cancel the item
         let updatedOrder = await Order.cancelItem(orderId, itemId, {
-            cancelledBy:  req.role.toUpperCase(),
+            cancelledBy: req.role.toUpperCase(),
             cancelReason: reason || 'Item cancelled',
         });
 
         // Recalculate order totals from remaining active items
-        const activeItems    = updatedOrder.items.filter(i => i.status !== 'CANCELLED');
-        const newTotalAmount = activeItems.reduce((sum, i) => sum + (i.price * i.quantity), 0);
+        const activeItems = updatedOrder.items.filter(i => i.status !== 'CANCELLED');
+        const newTotalAmount = activeItems.reduce((sum, i) => sum + ((i.price || 0) * (i.quantity || 0)), 0);
 
         let newTax = 0;
         if (order.totalAmount > 0) {
@@ -360,7 +413,7 @@ const cancelOrderItem = async (req, res) => {
 
         if (activeItems.length === 0) {
             orderUpdates.orderStatus = 'cancelled';
-            orderUpdates.kotStatus   = 'Closed';
+            orderUpdates.kotStatus = 'Closed';
         }
 
         updatedOrder = await Order.updateById(orderId, orderUpdates);
@@ -373,7 +426,7 @@ const cancelOrderItem = async (req, res) => {
             });
         }
 
-        req.app.get('socketio').to('restaurant_main').emit('itemUpdated',   updatedOrder);
+        req.app.get('socketio').to('restaurant_main').emit('itemUpdated', updatedOrder);
         req.app.get('socketio').to('restaurant_main').emit('order-updated', updatedOrder);
         res.json(updatedOrder);
     } catch (error) {

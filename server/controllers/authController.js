@@ -8,12 +8,23 @@ const generateToken = ({ userId, role }) =>
         issuer:    'KOT_AUTH',
     });
 
+const VALID_ROLES = ['admin', 'waiter', 'kitchen', 'cashier'];
+
 // @desc    Register a new user
 // @route   POST /api/auth/register
 // @access  Private (Admin)
 const registerUser = async (req, res) => {
     try {
         const { username, password, role } = req.body;
+
+        if (!username?.trim())
+            return res.status(400).json({ message: 'Username is required' });
+        if (!password)
+            return res.status(400).json({ message: 'Password is required' });
+        if (password.length < 6)
+            return res.status(400).json({ message: 'Password must be at least 6 characters' });
+        if (!VALID_ROLES.includes(role))
+            return res.status(400).json({ message: `Role must be one of: ${VALID_ROLES.join(', ')}` });
 
         if (await User.usernameExists(username)) {
             return res.status(400).json({ message: 'User already exists' });

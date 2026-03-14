@@ -35,7 +35,7 @@ const NewOrder = () => {
     }, [viewMode]);
 
 
-    const { user, formatPrice, settings } = useContext(AuthContext);
+    const { user, formatPrice, settings, socket } = useContext(AuthContext);
     const navigate = useNavigate();
 
     // ── Data Fetch ───────────────────────────────────────────────────
@@ -57,6 +57,57 @@ const NewOrder = () => {
         };
         fetchData();
     }, []);
+
+    // ── Real-time menu/category sync ─────────────────────────────────
+    useEffect(() => {
+        if (!socket) return;
+
+        const onMenuUpdated = ({ action, item, id }) => {
+            if (action === 'create' && item) {
+                // Only add if available
+                if (item.availability) {
+                    setMenuItems(prev => prev.find(i => i._id === item._id) ? prev : [...prev, item]);
+                }
+            } else if (action === 'update' && item) {
+                setMenuItems(prev => {
+                    const exists = prev.find(i => i._id === item._id);
+                    if (!item.availability) {
+                        // Remove unavailable items from POS
+                        return prev.filter(i => i._id !== item._id);
+                    }
+                    return exists
+                        ? prev.map(i => i._id === item._id ? item : i)
+                        : [...prev, item];
+                });
+                // Update price in cart if item is there
+                setCart(prev => prev.map(c =>
+                    c._id === item._id ? { ...c, name: item.name, price: item.price } : c
+                ));
+            } else if (action === 'delete' && id) {
+                setMenuItems(prev => prev.filter(i => i._id !== id));
+                setCart(prev => prev.filter(c => c._id !== id));
+            }
+        };
+
+        const onCategoryUpdated = ({ action, category, id }) => {
+            if (action === 'create' && category) {
+                setCategories(prev => prev.find(c => c._id === category._id) ? prev : [...prev, category]);
+            } else if (action === 'update' && category) {
+                setCategories(prev => prev.map(c => c._id === category._id ? category : c));
+            } else if (action === 'delete' && id) {
+                setCategories(prev => prev.filter(c => c._id !== id));
+                if (selectedCategory === id) setSelectedCategory(null);
+            }
+        };
+
+        socket.on('menu-updated', onMenuUpdated);
+        socket.on('category-updated', onCategoryUpdated);
+        return () => {
+            socket.off('menu-updated', onMenuUpdated);
+            socket.off('category-updated', onCategoryUpdated);
+        };
+    }, [socket, selectedCategory]);
+
 
     // ── Cart Logic ───────────────────────────────────────────────────
     const addToCart = useCallback((item) => {

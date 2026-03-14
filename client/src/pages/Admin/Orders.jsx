@@ -29,20 +29,30 @@ const AdminOrders = () => {
         fetchOrders();
 
         if (socket) {
-            const handleUpdate = (o) => setOrders(prev => prev.map(x => x._id === o._id ? o : x));
-            const handleNew = (o) => setOrders(prev => [o, ...prev]);
+            const handleUpdate = (o) => setOrders(prev => {
+                const exists = prev.find(x => x._id === o._id);
+                return exists ? prev.map(x => x._id === o._id ? o : x) : [o, ...prev];
+            });
+            const handleNew = (o) => setOrders(prev =>
+                prev.find(x => x._id === o._id) ? prev : [o, ...prev]
+            );
 
             socket.on('new-order', handleNew);
             socket.on('order-updated', handleUpdate);
+            socket.on('order-completed', handleUpdate);
             socket.on('orderCancelled', handleUpdate);
+            socket.on('itemUpdated', handleUpdate);
 
             return () => {
                 socket.off('new-order', handleNew);
                 socket.off('order-updated', handleUpdate);
+                socket.off('order-completed', handleUpdate);
                 socket.off('orderCancelled', handleUpdate);
+                socket.off('itemUpdated', handleUpdate);
             };
         }
     }, [user, socket, fetchOrders]);
+
 
     useEffect(() => {
         let temp = [...orders];

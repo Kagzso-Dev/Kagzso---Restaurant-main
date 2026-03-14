@@ -34,10 +34,10 @@ const getGrowth = async (req, res) => {
             ),
         ]);
 
-        const todayRevenue     = parseFloat(todayRows[0]?.revenue) || 0;
-        const yesterdayRevenue = parseFloat(yestRows[0]?.revenue)  || 0;
-        const todayCount       = todayRows[0]?.count    || 0;
-        const yesterdayCount   = yestRows[0]?.count     || 0;
+        const todayRevenue = parseFloat(todayRows[0]?.revenue) || 0;
+        const yesterdayRevenue = parseFloat(yestRows[0]?.revenue) || 0;
+        const todayCount = todayRows[0]?.count || 0;
+        const yesterdayCount = yestRows[0]?.count || 0;
 
         let growth = 0;
         if (yesterdayRevenue === 0 && todayRevenue > 0) {
@@ -49,11 +49,11 @@ const getGrowth = async (req, res) => {
 
         res.json({
             growth,
-            today:          todayRevenue,
-            yesterday:      yesterdayRevenue,
+            today: todayRevenue,
+            yesterday: yesterdayRevenue,
             todayCount,
             yesterdayCount,
-            period:         'daily',
+            period: 'daily',
         });
     } catch (error) {
         console.error('[dashboardController] getGrowth error:', error.message);
@@ -85,21 +85,28 @@ const getStats = async (req, res) => {
         const byStatus = {};
         statusRows.forEach(s => {
             byStatus[s.order_status] = {
-                count:   s.count,
+                count: s.count,
                 revenue: parseFloat(s.revenue || 0),
             };
         });
 
+        const todayStats = {
+            active: (byStatus.pending?.count || 0)
+                + (byStatus.accepted?.count || 0)
+                + (byStatus.preparing?.count || 0)
+                + (byStatus.ready?.count || 0),
+            completed: byStatus.completed?.count || 0,
+            cancelled: byStatus.cancelled?.count || 0,
+            revenue: byStatus.completed?.revenue || 0,
+        };
+
+        console.log('[dashboardController] getStats MySQL result:', {
+            today: todayStats,
+            allTime: countResult[0].cnt,
+        });
+
         res.json({
-            today: {
-                active:    (byStatus.pending?.count    || 0)
-                         + (byStatus.accepted?.count   || 0)
-                         + (byStatus.preparing?.count  || 0)
-                         + (byStatus.ready?.count      || 0),
-                completed: byStatus.completed?.count   || 0,
-                cancelled: byStatus.cancelled?.count   || 0,
-                revenue:   byStatus.completed?.revenue || 0,
-            },
+            today: todayStats,
             allTime: countResult[0].cnt,
         });
     } catch (error) {

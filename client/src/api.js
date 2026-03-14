@@ -19,7 +19,7 @@ const api = axios.create({
 api.interceptors.request.use(
     (config) => {
         try {
-            const user = JSON.parse(localStorage.getItem("user"));
+            const user = JSON.parse(sessionStorage.getItem("user"));
 
             // Add JWT token
             if (user?.token) {

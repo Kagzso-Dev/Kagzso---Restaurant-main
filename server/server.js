@@ -13,6 +13,7 @@ const { connectDB, pool } = require('./config/db');
 const logger = require('./utils/logger');
 const { getCacheStats } = require('./utils/cache');
 const { socketAuthMiddleware, authorizedRoomJoin, authorizedRoleJoin } = require('./middleware/socketAuth');
+const { backfillDailyAnalytics } = require('./utils/dailyAnalytics');
 
 const app = express();
 const server = http.createServer(app);
@@ -94,8 +95,11 @@ const apiLimiter = rateLimit({
     skip: (req) => req.path === '/' || req.path === '/health',
 });
 
-app.use('/api/auth', authLimiter);
-app.use('/api', apiLimiter);
+// Apply rate limits only in production to prevent 429 errors during local dev
+if (process.env.NODE_ENV !== 'development') {
+    app.use('/api/auth', authLimiter);
+    app.use('/api', apiLimiter);
+}
 
 // ─── Socket.IO Server ─────────────────────────────────────────────────────────
 const io = new Server(server, {
@@ -115,6 +119,10 @@ io.use(socketAuthMiddleware);
 // ─── API Routes ───────────────────────────────────────────────────────────────
 // Must be registered BEFORE static file serving so /api/* never falls through
 // to index.html.
+
+// Prevent favicon 404 spam in API logs
+app.get('/favicon.ico', (req, res) => res.status(204).end());
+
 app.use('/api/auth',           require('./routes/authRoutes'));
 app.use('/api/orders',         require('./routes/orderRoutes'));
 app.use('/api/tables',         require('./routes/tableRoutes'));
@@ -126,6 +134,68 @@ app.use('/api/analytics',      require('./routes/analyticsRoutes'));
 app.use('/api/payments',       require('./routes/paymentRoutes'));
 app.use('/api/notifications',  require('./routes/notificationRoutes'));
 app.use('/api/webhooks',       require('./routes/webhookRoutes'));
+
+// ─── Manual Backfill Endpoint (admin only) ───────────────────────────────────
+// POST /api/analytics/backfill?force=true  → re-aggregate all historical dates
+// POST /api/analytics/backfill             → aggregate only missing dates
+// Useful after data imports or when daily_analytics falls out of sync.
+const { protect, authorize } = require('./middleware/authMiddleware');
+app.post('/api/analytics/backfill',
+    protect,
+    authorize('admin'),
+    async (req, res) => {
+        const forceAll = req.query.force === 'true';
+        logger.info(`[backfill] Manual trigger by user ${req.userId} (forceAll=${forceAll})`);
+        const result = await backfillDailyAnalytics(forceAll);
+        res.json({ success: true, ...result });
+    }
+);
+
+// GET /api/analytics/daily?range=week|month|year → read from daily_analytics table
+app.get('/api/analytics/daily',
+    protect,
+    authorize('admin'),
+    async (req, res) => {
+        try {
+            const { range = 'month' } = req.query;
+            let since;
+            const now = new Date();
+            switch (range) {
+                case 'week':  since = new Date(now); since.setDate(now.getDate() - 7);   break;
+                case 'year':  since = new Date(now); since.setFullYear(now.getFullYear() - 1); break;
+                case 'month':
+                default:      since = new Date(now); since.setDate(now.getDate() - 30);  break;
+            }
+            const isoSince = since.toISOString().slice(0, 10);
+            const [rows] = await pool.query(
+                `SELECT date, total_orders, completed_orders, cancelled_orders,
+                        total_revenue, avg_order_value,
+                        dine_in_orders, takeaway_orders,
+                        cash_revenue, digital_revenue
+                 FROM daily_analytics
+                 WHERE date >= ?
+                 ORDER BY date ASC`,
+                [isoSince]
+            );
+            logger.info(`[dailyAnalytics] GET /api/analytics/daily returned ${rows.length} rows for range=${range}`);
+            res.json(rows.map(r => ({
+                date:             r.date instanceof Date ? r.date.toISOString().slice(0, 10) : String(r.date).slice(0, 10),
+                totalOrders:      r.total_orders,
+                completedOrders:  r.completed_orders,
+                cancelledOrders:  r.cancelled_orders,
+                totalRevenue:     parseFloat(r.total_revenue),
+                avgOrderValue:    parseFloat(r.avg_order_value),
+                dineInOrders:     r.dine_in_orders,
+                takeawayOrders:   r.takeaway_orders,
+                cashRevenue:      parseFloat(r.cash_revenue),
+                digitalRevenue:   parseFloat(r.digital_revenue),
+            })));
+        } catch (err) {
+            logger.error('[dailyAnalytics] GET /api/analytics/daily error:', { error: err.message });
+            res.status(500).json({ message: err.message });
+        }
+    }
+);
 
 // ─── Socket.IO Events ────────────────────────────────────────────────────────
 io.on('connection', (socket) => {
@@ -322,6 +392,16 @@ process.on('SIGINT',  () => shutdown('SIGINT'));
 const startServer = async () => {
     try {
         await connectDB();
+
+        // ── Backfill daily_analytics from all existing order data ─────────────
+        // Runs in background — only fills in dates that are missing so it's fast
+        // on every subsequent restart. All historical dates with orders are covered
+        // in one pass so the analytics dashboard shows data immediately.
+        backfillDailyAnalytics(false).then(({ processed, skipped }) => {
+            logger.info(`[dailyAnalytics] Startup backfill complete`, { processed, skipped });
+        }).catch(err => {
+            logger.warn('[dailyAnalytics] Startup backfill failed', { error: err.message });
+        });
 
         const PORT = parseInt(process.env.PORT) || 5005;
         server.listen(PORT, '0.0.0.0', () => {

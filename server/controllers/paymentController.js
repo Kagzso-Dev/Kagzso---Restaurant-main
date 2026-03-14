@@ -101,8 +101,8 @@ const processPayment = async (req, res) => {
             return res.status(400).json({ message: 'Order is not eligible for payment' });
         }
 
-        const orderTotal = order.finalAmount;
-        const received   = Number(amountReceived) || 0;
+        const orderTotal = order.finalAmount || 0;
+        const received   = (amountReceived != null && !isNaN(Number(amountReceived))) ? Number(amountReceived) : 0;
 
         if (paymentMethod === 'cash' && received < orderTotal) {
             return res.status(400).json({
@@ -162,7 +162,7 @@ const processPayment = async (req, res) => {
 
         createAndEmitNotification(req.app.get('socketio'), {
             title:         `Payment Received — Order #${order.orderNumber}`,
-            message:       `${paymentMethod.toUpperCase()} payment of ${orderTotal.toFixed(2)} processed`,
+            message:       `${paymentMethod.toUpperCase()} payment of ${(orderTotal || 0).toFixed(2)} processed`,
             type:          'PAYMENT_SUCCESS',
             roleTarget:    'admin',
             referenceId:   order._id,

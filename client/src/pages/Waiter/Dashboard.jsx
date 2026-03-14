@@ -136,23 +136,29 @@ const WaiterDashboard = () => {
                 return [o, ...p];
             });
             const onUpdate = (o) => {
-                setOrders(p => p.map(x => x._id === o._id ? o : x));
+                setOrders(p => {
+                    const exists = p.find(x => x._id === o._id);
+                    return exists ? p.map(x => x._id === o._id ? o : x) : [o, ...p];
+                });
                 if (selectedOrder?._id === o._id) setSelectedOrder(o);
             };
 
             socket.on('new-order', onNew);
             socket.on('order-updated', onUpdate);
+            socket.on('order-completed', onUpdate);
             socket.on('orderCancelled', onUpdate);
-            socket.on('itemUpdated', onUpdate); // Listen for item cancellation
+            socket.on('itemUpdated', onUpdate);
 
             return () => {
                 socket.off('new-order', onNew);
                 socket.off('order-updated', onUpdate);
+                socket.off('order-completed', onUpdate);
                 socket.off('orderCancelled', onUpdate);
                 socket.off('itemUpdated', onUpdate);
             };
         }
     }, [user, socket, fetchOrders, selectedOrder]);
+
 
     const handleCancelAction = async (orderId, arg2, arg3) => {
         try {

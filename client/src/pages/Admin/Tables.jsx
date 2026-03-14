@@ -138,8 +138,10 @@ const AdminTables = () => {
         [tables, statusFilter]
     );
 
-    const nextTableNum =
-        tables.length > 0 ? Math.max(...tables.map((t) => parseInt(t.number))) + 1 : 1;
+    const nextTableNum = (() => {
+        const nums = tables.map((t) => parseInt(t.number)).filter((n) => !isNaN(n));
+        return nums.length > 0 ? Math.max(...nums) + 1 : 1;
+    })();
 
     // ── Render ───────────────────────────────────────────────────────────────
 

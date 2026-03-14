@@ -5,7 +5,8 @@ const {
     getHeatmap,
     getWaitersRanking,
     getKitchenPerformance,
-    getReport
+    getReport,
+    getItemPerformance,
 } = require('../controllers/analyticsController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { cacheMiddleware } = require('../utils/cache');
@@ -23,5 +24,6 @@ router.get('/heatmap', cacheMiddleware(60, 'analytics'), getHeatmap);
 router.get('/waiters', cacheMiddleware(30, 'analytics'), getWaitersRanking);
 router.get('/kitchen', cacheMiddleware(30, 'analytics'), getKitchenPerformance);
 router.get('/report', cacheMiddleware(45, 'analytics'), getReport);
+router.get('/items', cacheMiddleware(45, 'analytics'), getItemPerformance);
 
 module.exports = router;

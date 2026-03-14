@@ -1,5 +1,5 @@
 const Setting = require('../models/Setting');
-const User    = require('../models/User');
+const User = require('../models/User');
 
 // GET /api/settings
 const getSettings = async (req, res) => {
@@ -14,6 +14,7 @@ const getSettings = async (req, res) => {
 const updateSettings = async (req, res) => {
     try {
         const settings = await Setting.update(req.body);
+        req.app.get('socketio').to('restaurant_main').emit('settings-updated', settings);
         res.json(settings);
     } catch (error) {
         res.status(500).json({ message: 'Error updating settings' });

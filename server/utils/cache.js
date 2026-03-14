@@ -108,16 +108,21 @@ const cacheMiddleware = (ttlSeconds = 30, prefix = '') => {
         // Only cache GET requests
         if (req.method !== 'GET') return next();
 
+        // Bypass cache if requested
+        const isRefresh = req.headers['x-refresh'] === 'true' || req.query.refresh === 'true';
+
         // Build scoped cache key: global + route + query
         const scope = 'global';
         const queryString = JSON.stringify(req.query || {});
         const key = `${prefix}:${scope}:${req.originalUrl}:${queryString}`;
 
-        const cached = cache.get(key);
-        if (cached) {
-            res.setHeader('X-Cache', 'HIT');
-            res.setHeader('X-Cache-TTL', ttlSeconds);
-            return res.json(cached);
+        if (!isRefresh) {
+            const cached = cache.get(key);
+            if (cached) {
+                res.setHeader('X-Cache', 'HIT');
+                res.setHeader('X-Cache-TTL', ttlSeconds);
+                return res.json(cached);
+            }
         }
 
         // Intercept res.json to capture and cache the response

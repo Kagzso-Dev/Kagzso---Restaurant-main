@@ -161,7 +161,7 @@ const REQUIRED_TABLES = [
             transaction_id  VARCHAR(200) DEFAULT NULL,
             amount          DECIMAL(10,2) NOT NULL,
             amount_received DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-            \`change\`      DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+            change_amount   DECIMAL(10,2) NOT NULL DEFAULT 0.00,
             cashier_id      INT UNSIGNED DEFAULT NULL,
             created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -294,6 +294,16 @@ const REQUIRED_COLUMNS = [
         table: 'tables',
         column: 'locked_by',
         ddl: 'ALTER TABLE `tables` ADD COLUMN locked_by INT UNSIGNED DEFAULT NULL AFTER current_order_id',
+    },
+    {
+        table: 'tables',
+        column: 'number',
+        ddl: 'ALTER TABLE `tables` ADD COLUMN number INT NOT NULL AFTER id',
+    },
+    {
+        table: 'tables',
+        column: 'capacity',
+        ddl: 'ALTER TABLE `tables` ADD COLUMN capacity INT NOT NULL AFTER number',
     },
     {
         table: 'tables',

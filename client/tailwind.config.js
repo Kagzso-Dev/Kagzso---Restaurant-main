@@ -56,15 +56,15 @@ export default {
             keyframes: {
                 fadeIn: {
                     '0%': { opacity: '0', transform: 'translateY(8px)' },
-                    '100%': { opacity: '1', transform: 'translateY(0)' },
+                    '100%': { opacity: '1', transform: 'none' },
                 },
                 slideInLeft: {
                     '0%': { transform: 'translateX(-100%)' },
-                    '100%': { transform: 'translateX(0)' },
+                    '100%': { transform: 'none' },
                 },
                 slideInRight: {
                     '0%': { opacity: '0', transform: 'translateX(100%)' },
-                    '100%': { opacity: '1', transform: 'translateX(0)' },
+                    '100%': { opacity: '1', transform: 'none' },
                 },
                 slideOutLeft: {
                     '0%': { transform: 'translateX(0)' },
@@ -72,12 +72,12 @@ export default {
                 },
                 slideUp: {
                     '0%': { opacity: '0', transform: 'translateY(16px)' },
-                    '100%': { opacity: '1', transform: 'translateY(0)' },
+                    '100%': { opacity: '1', transform: 'none' },
                 },
                 bounceIn: {
                     '0%': { transform: 'scale(0.6)', opacity: '0' },
                     '70%': { transform: 'scale(1.05)' },
-                    '100%': { transform: 'scale(1)', opacity: '1' },
+                    '100%': { transform: 'none', opacity: '1' },
                 },
                 shimmer: {
                     '0%': { backgroundPosition: '-200% 0' },

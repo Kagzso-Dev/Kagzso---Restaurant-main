@@ -7,7 +7,7 @@ const fmt = (row) => row ? {
     transactionId:  row.transaction_id,
     amount:         parseFloat(row.amount),
     amountReceived: parseFloat(row.amount_received),
-    change:         parseFloat(row.change || 0),
+    change:         parseFloat(row.change_amount || 0),
     // When joined with users table, cashierId is an object; otherwise just the ID
     cashierId:      row.cashier_username
         ? { _id: row.cashier_id, username: row.cashier_username, role: row.cashier_role }
@@ -39,7 +39,7 @@ const Payment = {
     async create({ orderId, paymentMethod, transactionId, amount, amountReceived, change, cashierId }) {
         const [result] = await pool.query(
             `INSERT INTO payments
-             (order_id, payment_method, transaction_id, amount, amount_received, \`change\`, cashier_id)
+             (order_id, payment_method, transaction_id, amount, amount_received, change_amount, cashier_id)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
                 orderId,

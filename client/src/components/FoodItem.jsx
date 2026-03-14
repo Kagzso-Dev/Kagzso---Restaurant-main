@@ -8,6 +8,7 @@ const FoodItem = memo(({
     onAdd,
     onEdit,
     onDelete,
+    onToggleAvailability,
     showActions = true,
     isAdmin = false
 }) => {
@@ -60,15 +61,26 @@ const FoodItem = memo(({
                     <div className="flex items-center gap-2">
                         {isAdmin ? (
                             <>
+                                {onToggleAvailability && (
+                                    <button
+                                        onClick={(e) => { e.stopPropagation(); onToggleAvailability(item); }}
+                                        className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors border ${item.availability
+                                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20'
+                                                : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/20'
+                                            }`}
+                                    >
+                                        {item.availability ? 'Available' : 'Unavailable'}
+                                    </button>
+                                )}
                                 <button
-                                    onClick={() => onEdit(item)}
+                                    onClick={(e) => { e.stopPropagation(); onEdit(item); }}
                                     className="p-2 text-[var(--theme-text-muted)] hover:text-[var(--theme-text-main)] hover:bg-[var(--theme-bg-hover)] rounded-lg transition-colors"
                                     title="Edit Item"
                                 >
                                     <Edit size={16} />
                                 </button>
                                 <button
-                                    onClick={() => onDelete(item._id)}
+                                    onClick={(e) => { e.stopPropagation(); onDelete(item._id); }}
                                     className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-lg transition-colors"
                                     title="Delete Item"
                                 >
@@ -124,14 +136,25 @@ const FoodItem = memo(({
                         <div className="flex items-center gap-1">
                             {isAdmin ? (
                                 <>
+                                    {onToggleAvailability && (
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); onToggleAvailability(item); }}
+                                            className={`px-2 py-1 text-[10px] font-bold rounded-lg border transition-colors ${item.availability
+                                                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20'
+                                                    : 'bg-red-500/10 text-red-400 border-red-500/20 hover:bg-emerald-500/10 hover:text-emerald-400 hover:border-emerald-500/20'
+                                                }`}
+                                        >
+                                            {item.availability ? 'Live' : 'Hidden'}
+                                        </button>
+                                    )}
                                     <button
-                                        onClick={() => onEdit(item)}
+                                        onClick={(e) => { e.stopPropagation(); onEdit(item); }}
                                         className="p-1.5 text-[var(--theme-text-muted)] hover:text-[var(--theme-text-main)] hover:bg-[var(--theme-bg-hover)] rounded-lg transition-colors"
                                     >
                                         <Edit size={14} />
                                     </button>
                                     <button
-                                        onClick={() => onDelete(item._id)}
+                                        onClick={(e) => { e.stopPropagation(); onDelete(item._id); }}
                                         className="p-1.5 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded-lg transition-colors"
                                     >
                                         <Trash2 size={14} />

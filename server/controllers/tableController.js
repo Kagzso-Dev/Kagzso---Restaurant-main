@@ -35,12 +35,20 @@ const getTables = async (req, res) => {
 // @route   POST /api/tables
 // @access  Private (Admin)
 const createTable = async (req, res) => {
-    const { number, capacity } = req.body;
+    const number = parseInt(req.body.number);
+    const capacity = parseInt(req.body.capacity);
     try {
+        if (!number || isNaN(number) || number < 1) {
+            return res.status(400).json({ message: 'Table number must be a positive integer' });
+        }
+        if (!capacity || isNaN(capacity) || capacity < 1) {
+            return res.status(400).json({ message: 'Capacity must be a positive integer' });
+        }
         if (await Table.numberExists(number)) {
             return res.status(400).json({ message: 'Table number already exists' });
         }
         const table = await Table.create({ number, capacity });
+        req.app.get('socketio').to('restaurant_main').emit('table-updated', { action: 'create', table });
         res.status(201).json(table);
     } catch (error) {
         res.status(500).json({ message: error.message });
@@ -216,6 +224,7 @@ const deleteTable = async (req, res) => {
             });
         }
         await Table.deleteById(req.params.id);
+        req.app.get('socketio').to('restaurant_main').emit('table-updated', { action: 'delete', id: req.params.id });
         res.json({ message: 'Table removed' });
     } catch (error) {
         res.status(500).json({ message: error.message });
